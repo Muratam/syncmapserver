@@ -3,17 +3,48 @@ package main
 import (
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 )
 
-// SyncMap で頑張るサーバー。Goアプリの上で動かす。
-// 1: 1台目のアプリで動かすので1台目->1台目のロスtcpロスがなくて速いはず
-// 2: トランザクションが容易
-// 3: OnMemory (再起動可能かは未だ)
-// 4: MySQL からのデータの移動を容易にしたいね
-// Initilize も可能にしておきたい
+const maxClientConnectionNum = 15
+
+// MutexInt
+type MutexInt struct {
+	mutex sync.Mutex
+	val   int
+}
+
+func (this *MutexInt) Set(value int) {
+	this.mutex.Lock()
+	this.val = value
+	this.mutex.Unlock()
+}
+func (this *MutexInt) Get() int {
+	this.mutex.Lock()
+	val := this.val
+	this.mutex.Unlock()
+	return val
+}
+func (this *MutexInt) Inc() int {
+	this.mutex.Lock()
+	this.val += 1
+	val := this.val
+	this.mutex.Unlock()
+	return val
+}
+func (this *MutexInt) Dec() int {
+	this.mutex.Lock()
+	this.val -= 1
+	val := this.val
+	this.mutex.Unlock()
+	return val
+}
+
+// SyncMapServer
 
 func StartSyncMapServer(port int) {
 	listen, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(port))
@@ -21,45 +52,73 @@ func StartSyncMapServer(port int) {
 	if err != nil {
 		panic(err)
 	}
+	var countSum MutexInt
 	for {
 		conn, err := listen.Accept()
-		defer conn.Close()
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("Server:", err)
 			continue
 		}
 		go func() {
+			defer conn.Close()
 			for { // EOFまで読む
-				buf := make([]byte, 1024)
-				_, err := conn.Read(buf)
+				readMax := 1024
+				buf := make([]byte, readMax)
+				readBufNum, err := conn.Read(buf)
 				if err != nil {
 					if err == io.EOF {
 						return
 					}
 					panic(err)
 				}
-				fmt.Print("S:", string(buf))
+				fmt.Println(countSum.Inc())
+				// fmt.Print("S:", string(buf))
+				if readBufNum < readMax { // たぶんあってるはず
+					return
+				}
 			}
 		}()
 	}
 }
+
 func testConnect(port int) {
-	for {
+	var connectFunc func()
+	var connectNum MutexInt
+	connectFunc = func() {
+		for connectNum.Get() > maxClientConnectionNum {
+			time.Sleep(time.Duration(100+rand.Intn(400)) * time.Nanosecond)
+		}
+		connectNum.Inc()
 		conn, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(port))
-		defer conn.Close()
 		if err != nil {
-			fmt.Println(err)
-			continue
+			fmt.Println("Client", connectNum.Get(), err)
+			if conn != nil {
+				conn.Close()
+			}
+			time.Sleep(1 * time.Millisecond)
+			connectNum.Dec()
+			connectFunc()
+			return
 		}
 		buf := []byte("write")
 		conn.Write(buf)
-		time.Sleep(100 * time.Nanosecond)
+		conn.Close()
+		connectNum.Dec()
+	}
+	for i := 0; i < 1000; i++ {
+		go connectFunc()
+	}
+}
+
+func testSyncMapServer() {
+	go StartSyncMapServer(8888)
+	time.Sleep(10 * time.Millisecond)
+	go testConnect(8888)
+	for { // 通常はGojiとかのサブとして使うので無限に待機
+		time.Sleep(1000 * time.Millisecond)
 	}
 }
 
 func main() {
-	go StartSyncMapServer(8888)
-	time.Sleep(10 * time.Millisecond)
-	go testConnect(8888)
-	time.Sleep(50000 * time.Millisecond) // 通常はサブとして使うので...
+	testSyncMapServer()
 }
