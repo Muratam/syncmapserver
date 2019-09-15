@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -45,16 +46,6 @@ func (this *MutexInt) Dec() int {
 }
 
 // bytes utils
-func toStringWithoutLastZero(bytes []byte) string {
-	blen := 0
-	bMaxLen := len(bytes)
-	for ; blen < bMaxLen; blen++ {
-		if bytes[blen] == 0 {
-			break
-		}
-	}
-	return string(bytes[:blen])
-}
 func readAll(conn *net.Conn) []byte {
 	readMax := 1024
 	bufAll := make([]byte, readMax)
@@ -93,32 +84,14 @@ func readAll(conn *net.Conn) []byte {
 // SyncMapServer
 // とりあえず string -> byte[] で
 type SyncMapServer struct {
-	syncmap          sync.Map
+	SyncMap          sync.Map
 	substanceAddress string
 	connectNum       MutexInt
-	myMutex          sync.Mutex
+	mutex            sync.Mutex
+	Interpret        func(this *SyncMapServer, buf []byte) []byte
 }
 
-func (m *SyncMapServer) IsOnThisApp() bool {
-	return len(m.substanceAddress) == 0
-}
-func (m *SyncMapServer) LoadDirect(key string) ([]byte, bool) {
-	val, ok := m.syncmap.Load(key)
-	if !ok {
-		return []byte(""), false
-	}
-	return val.([]byte), true
-}
-func (m *SyncMapServer) StoreDirect(key string, value []byte) {
-	m.syncmap.Store(key, value)
-}
-func (m *SyncMapServer) LockAll() {
-	m.myMutex.Lock()
-}
-func (m *SyncMapServer) UnlockAll() {
-	m.myMutex.Unlock()
-}
-func NewMasterSyncMapServer(port int) *SyncMapServer {
+func newMasterSyncMapServer(port int) *SyncMapServer {
 	this := &SyncMapServer{}
 	this.substanceAddress = ""
 	go func() {
@@ -134,17 +107,20 @@ func NewMasterSyncMapServer(port int) *SyncMapServer {
 				continue
 			}
 			go func() {
-				conn.Write(this.Interpret(readAll(&conn)))
+				conn.Write(this.Interpret(this, readAll(&conn)))
 				conn.Close()
 			}()
 		}
 	}()
+	time.Sleep(10 * time.Millisecond) // NOTE: 起動終了までちょっと時間がかかるかもしれないので待機しておく
+	this.Interpret = func(this *SyncMapServer, buf []byte) []byte { return buf }
 	return this
 }
-func NewSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
-	result := &SyncMapServer{}
-	result.substanceAddress = substanceAddress
-	return result
+func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
+	this := &SyncMapServer{}
+	this.substanceAddress = substanceAddress
+	this.Interpret = func(this *SyncMapServer, buf []byte) []byte { return buf }
+	return this
 }
 
 // SyncMapServer
@@ -170,70 +146,102 @@ func (this *SyncMapServer) sendBySlave(f func() []byte) []byte {
 	return result
 }
 
-// 違いを吸収
+// public methods
+func (this *SyncMapServer) IsOnThisApp() bool {
+	return len(this.substanceAddress) == 0
+}
+func (this *SyncMapServer) LockAll() {
+	this.mutex.Lock()
+}
+func (this *SyncMapServer) UnlockAll() {
+	this.mutex.Unlock()
+}
 func (this *SyncMapServer) Send(f func() []byte) []byte {
 	if this.IsOnThisApp() {
-		return this.Interpret(f())
+		return this.Interpret(this, f())
 	} else {
 		return this.sendBySlave(f)
 	}
 }
-
-// ここはどちらでも共通。ここを実装する。
-func (this *SyncMapServer) Interpret(buf []byte) []byte {
-	// 一連の要求がまとめて送られてくる。その中では整合性が保てていて欲しい。
-	// command := string(buf[:4])
-	// content := toStringWithoutLastZero(buf[4:])
-	// // fmt.Println("Serve:", command, content)
-	// if strings.Compare(command, "GET ") == 0 {
-	// 	loaded, _ := this.Load(content)
-	// 	conn.Write(loaded)
-	// 	return
-	// } else if strings.Compare(command, "SET ") == 0 {
-	// 	splitted := strings.SplitN(content, "\n\n", 2) // WARN: キーに \n\nがあったら死ぬ
-	// 	if len(splitted) != 2 {
-	// 		conn.Write([]byte("x"))
-	// 	} else {
-	// 		this.Store(splitted[0], []byte(splitted[1]))
-	// 		conn.Write([]byte("o"))
-	// 	}
-	// 	return
-	// } else {	}
-	// 雑に echo サーバー
-	return buf
+func NewMasterOrSlaveSyncMapServer(substanceAddress string, isMaster bool) *SyncMapServer {
+	if isMaster {
+		port, _ := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
+		return newMasterSyncMapServer(port)
+	} else {
+		return newSlaveSyncMapServer(substanceAddress)
+	}
 }
 
+/*
+func (this *SyncMapServer) Load(key interface{}) (value interface{}, ok bool) {
+	if this.IsOnThisApp() {
+		return this.SyncMap.Load(key)
+	} else { // やっていき？
+		return this.SyncMap.Load(key)
+	}
+}
+func (this *SyncMapServer) Store(key, value interface{}) {
+	if this.IsOnThisApp() {
+		this.SyncMap.Store(key, value)
+	} else { // やっていき？
+		this.SyncMap.Store(key, value)
+	}
+}
+func (m *SyncMapServer) LoadBytesDirect(key string) ([]byte, bool) {
+	val, ok := m.SyncMap.Load(key)
+	if !ok {
+		return []byte(""), false
+	}
+	return val.([]byte), true
+}
+func (m *SyncMapServer) StoreBytesDirect(key string, value []byte) {
+	m.SyncMap.Store(key, value)
+}
+*/
+
 func testSyncMapServer() {
-	var masterSyncMapServer = NewMasterSyncMapServer(8888)
-	time.Sleep(10 * time.Millisecond)
-	masterSyncMapServer.StoreDirect("iikanji", []byte("0")) // NOTE: 後で消す
+	address := "127.0.0.1:8888"
+	var masterSyncMapServer = NewMasterOrSlaveSyncMapServer(address, true)
+	// 直で保存する
+	masterSyncMapServer.SyncMap.Store("sum", 0)
+	// Interpret を変更すればいい感じになる。
+	masterSyncMapServer.Interpret = func(this *SyncMapServer, buf []byte) []byte {
+		this.LockAll()
+		x, _ := this.SyncMap.Load("sum")
+		this.SyncMap.Store("sum", x.(int)+1)
+		this.UnlockAll()
+		fmt.Println(x)
+		// command := string(buf[:4])
+		// // fmt.Println("Serve:", command, content)
+		// if strings.Compare(command, "GET ") == 0 {
+		// 	loaded, _ := this.Load(content)
+		// 	conn.Write(loaded)
+		// 	return
+		// } else if strings.Compare(command, "SET ") == 0 {
+		// 	splitted := strings.SplitN(content, "\n\n", 2) // WARN: キーに \n\nがあったら死ぬ
+		// 	if len(splitted) != 2 {
+		// 		conn.Write([]byte("x"))
+		// 	} else {
+		// 		this.Store(splitted[0], []byte(splitted[1]))
+		// 		conn.Write([]byte("o"))
+		// 	}
+		// 	return
+		// } else {	}
+		// 雑に echo サーバー
+		return buf
+	}
 	go func() {
-		// var slaveSyncMapServer = NewSlaveSyncMapServer("127.0.0.1:8888")
-		for i := 0; i < 1; i++ {
+		var slaveSyncMapServer = NewMasterOrSlaveSyncMapServer(address, false)
+		slaveSyncMapServer.Interpret = masterSyncMapServer.Interpret
+		for i := 0; i < 10000; i++ {
 			go func() {
-				result := masterSyncMapServer.Send(func() []byte {
-					x := ""
-					for i := 0; i < 1025; i++ {
-						x += "a"
-					}
-					return []byte(x)
+				slaveSyncMapServer.Send(func() []byte {
+					return []byte("increment sum 1")
 				})
-				fmt.Println(string(result), len(result))
-				// x := 0
-				// clientSyncMap.ConnectByClient(func(conn net.Conn) {
+				// fmt.Println(string(result), len(result))
 				// 	buf := []byte("GET iikanji")
-				// 	conn.Write(buf)
-				// 	n, err := conn.Read(buf)
-				// 	if err != nil {
-				// 		panic(err)
-				// 	}
 				// 	x, _ = strconv.Atoi(string(buf[:n]))
-				// })
-				// fmt.Println(x)
-				// x += 1
-				// clientSyncMap.ConnectByClient(func(conn net.Conn) {
 				// 	buf := []byte("SET iikanji\n\n" + strconv.FormatInt(int64(x), 10))
-				// 	conn.Write(buf)
 				// })
 			}()
 		}
@@ -242,6 +250,9 @@ func testSyncMapServer() {
 		time.Sleep(1000 * time.Millisecond)
 	}
 }
+
+// 実際はこんな感じで使いたい
+// var globalSyncMapServer = NewMasterOrSlaveSyncMapServer("127.0.0.1:9000", false)
 
 func main() {
 	testSyncMapServer()
