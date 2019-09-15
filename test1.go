@@ -16,8 +16,8 @@ type Pos struct {
 
 func testSyncMapServer() {
 	address := "127.0.0.1:8888"
-	var masterSyncMapServer = NewMasterOrSlaveSyncMapServer(address, true, DefaultSendFunction)
-	// var slaveSyncMapServer = NewMasterOrSlaveSyncMapServer(address, false, DefaultSendFunction)
+	var masterSyncMapServer = NewMasterOrSlaveSyncMapServer(address, true, DefaultSendCustomFunction)
+	// var slaveSyncMapServer = NewMasterOrSlaveSyncMapServer(address, false, DefaultSendCustomFunction)
 	// # 同期的メソッド
 	// pos := Pos{0, 0, ""}
 	// masterSyncMapServer.Store("pos", pos)

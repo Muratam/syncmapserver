@@ -105,15 +105,15 @@ func DecodeFromBytes(bytes_ []byte, x interface{}) {
 // SyncMapServer
 // とりあえず string -> byte[] で
 type SyncMapServer struct {
-	SyncMap          sync.Map
-	substanceAddress string
-	connectNum       MutexInt
-	mutex            sync.Mutex
-	SendImpl         func(this *SyncMapServer, buf []byte) []byte
+	SyncMap              sync.Map
+	substanceAddress     string
+	connectNum           MutexInt
+	mutex                sync.Mutex
+	MySendCustomFunction func(this *SyncMapServer, buf []byte) []byte
 }
 
-func DefaultSendFunction(this *SyncMapServer, buf []byte) []byte {
-	return buf
+func DefaultSendCustomFunction(this *SyncMapServer, buf []byte) []byte {
+	return buf // echo server
 }
 
 func newMasterSyncMapServer(port int) *SyncMapServer {
@@ -140,28 +140,28 @@ func newMasterSyncMapServer(port int) *SyncMapServer {
 	// 起動終了までちょっと時間がかかるかもしれないので待機しておく
 	time.Sleep(10 * time.Millisecond)
 	// 何も設定しなければecho
-	this.SendImpl = func(this *SyncMapServer, buf []byte) []byte { return buf }
+	this.MySendCustomFunction = func(this *SyncMapServer, buf []byte) []byte { return buf }
 	return this
 }
 func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	this := &SyncMapServer{}
 	this.substanceAddress = substanceAddress
-	this.SendImpl = func(this *SyncMapServer, buf []byte) []byte { return buf }
+	this.MySendCustomFunction = func(this *SyncMapServer, buf []byte) []byte { return buf }
 	return this
 }
 func NewMasterOrSlaveSyncMapServer(
 	substanceAddress string,
 	isMaster bool,
-	SendImpl func(this *SyncMapServer, buf []byte) []byte) *SyncMapServer {
+	MySendCustomFunction func(this *SyncMapServer, buf []byte) []byte) *SyncMapServer {
 
 	if isMaster {
 		port, _ := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
 		result := newMasterSyncMapServer(port)
-		result.SendImpl = SendImpl
+		result.MySendCustomFunction = MySendCustomFunction
 		return result
 	} else {
 		result := newSlaveSyncMapServer(substanceAddress)
-		result.SendImpl = SendImpl
+		result.MySendCustomFunction = MySendCustomFunction
 		return result
 	}
 }
@@ -219,7 +219,7 @@ var syncMapLockAllCommand = []byte("LOCK")           // start transaction WARN: 
 var syncMapUnlockAllCommand = []byte("UNLOCK")       // end transaction
 var syncMapAddCommand = []byte("ADD")                // add value
 var syncMapExistsKeyCommand = []byte("EXISTS")       // check if exists key TODO:
-var syncMapDeleteCommand = []byte("DEL")             // delete TODO:
+var syncMapDeleteCommand = []byte("DEL")             // delete
 var syncMapLengthCommand = []byte("LEN")             // key count TODO:
 var syncMapLockKeyCommand = []byte("LOCK_K")         // lock a key     TODO:
 var syncMapUnlockKeyCommand = []byte("UNLOCK_K")     // unlock a key   TODO:
@@ -249,19 +249,23 @@ func (this *SyncMapServer) send(f func() []byte, force bool) []byte {
 	}
 }
 
-func (this *SyncMapServer) sendImpl(f func() []byte, force bool) []byte {
-	return this.send(func() []byte {
-		return join([][]byte{
-			syncMapCustomCommand,
-			f(),
-		})
-	}, force)
+func (this *SyncMapServer) sendCustomImpl(f func() []byte, forceDirect, forceConnect bool) []byte {
+	if forceDirect || this.IsOnThisApp() {
+		return this.MySendCustomFunction(this, f())
+	} else {
+		return this.send(func() []byte {
+			return join([][]byte{
+				syncMapCustomCommand,
+				f(),
+			})
+		}, forceConnect)
+	}
 }
-func (this *SyncMapServer) Send(f func() []byte) []byte {
-	return this.sendImpl(f, false)
+func (this *SyncMapServer) SendCustom(f func() []byte) []byte {
+	return this.sendCustomImpl(f, false, false)
 }
-func (this *SyncMapServerTransaction) Send(f func() []byte) []byte {
-	return this.server.sendImpl(f, true)
+func (this *SyncMapServerTransaction) SendCustom(f func() []byte) []byte {
+	return this.server.sendCustomImpl(f, false, true)
 }
 
 // NOTE: 変更できるようにpointer型で受け取ること
@@ -312,8 +316,52 @@ func (this *SyncMapServerTransaction) Store(key string, value interface{}) {
 }
 
 // Masterなら直に、SlaveならTCPでつないで実行
-func (this *SyncMapServer) Add(key string, value int) int {
-	if this.IsOnThisApp() {
+func (this *SyncMapServer) deleteImpl(key string, forceDirect, forceConnection bool) {
+	if forceDirect || this.IsOnThisApp() {
+		this.SyncMap.Delete(key)
+	} else {
+		this.send(func() []byte {
+			return join([][]byte{
+				syncMapDeleteCommand,
+				[]byte(key),
+			})
+		}, forceConnection)
+	}
+}
+func (this *SyncMapServer) Delete(key string) {
+	this.deleteImpl(key, false, false)
+}
+func (this *SyncMapServerTransaction) Delete(key string) {
+	this.server.deleteImpl(key, false, true)
+}
+
+// Masterなら直に、SlaveならTCPでつないで実行
+func (this *SyncMapServer) exitstsImpl(key string, forceDirect, forceConnection bool) bool {
+	if forceDirect || this.IsOnThisApp() {
+		_, ok := this.SyncMap.Load(key)
+		return ok
+	} else {
+		encoded := this.send(func() []byte {
+			return join([][]byte{
+				syncMapExistsKeyCommand,
+				[]byte(key),
+			})
+		}, forceConnection)
+		ok := false
+		DecodeFromBytes(encoded, &ok)
+		return ok
+	}
+}
+func (this *SyncMapServer) Exists(key string) bool {
+	return this.exitstsImpl(key, false, false)
+}
+func (this *SyncMapServerTransaction) Exists(key string) bool {
+	return this.server.exitstsImpl(key, false, true)
+}
+
+// Masterなら直に、SlaveならTCPでつないで実行
+func (this *SyncMapServer) addImpl(key string, value int, forceDirect bool) int {
+	if forceDirect || this.IsOnThisApp() {
 		this.mutex.Lock()
 		x := 0
 		this.LoadDirect(key, &x)
@@ -333,6 +381,9 @@ func (this *SyncMapServer) Add(key string, value int) int {
 		DecodeFromBytes(x, &result)
 		return result
 	}
+}
+func (this *SyncMapServer) Add(key string, value int) int {
+	return this.addImpl(key, value, false)
 }
 func (this *SyncMapServer) StartTransaction(f func(this *SyncMapServerTransaction)) {
 	if this.IsOnThisApp() {
@@ -374,10 +425,10 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		if !ok {
 			return []byte("")
 		}
-		return value.([]byte)
+		return value.([]byte) // バイト列をそのまま返すので loadImplが使えない
 	} else if bytes.Compare(command, syncMapStoreCommand) == 0 {
 		key := string(ss[1])
-		value := ss[2]
+		value := ss[2] // バイト列をそのまま保存するので storeImplが使えない
 		this.SyncMap.Store(key, value)
 		return []byte("")
 	} else if bytes.Compare(command, syncMapLockAllCommand) == 0 {
@@ -387,18 +438,18 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		this.mutex.Unlock()
 		return []byte("")
 	} else if bytes.Compare(command, syncMapAddCommand) == 0 {
-		key := string(ss[1])
-		x := 0
-		this.mutex.Lock()
-		this.LoadDirect(key, &x)
 		value := 0
 		DecodeFromBytes(ss[2], &value)
-		x += value
-		this.StoreDirect(key, x)
-		this.mutex.Unlock()
+		x := this.addImpl(string(ss[1]), value, true)
 		return EncodeToBytes(x)
+	} else if bytes.Compare(command, syncMapDeleteCommand) == 0 {
+		this.deleteImpl(string(ss[1]), true, false)
+		return []byte("")
+	} else if bytes.Compare(command, syncMapExistsKeyCommand) == 0 {
+		ok := this.exitstsImpl(string(ss[1]), true, false)
+		return EncodeToBytes(ok)
 	} else if bytes.Compare(command, syncMapCustomCommand) == 0 {
-		return this.SendImpl(this, ss[1])
+		return this.sendCustomImpl(func() []byte { return ss[1] }, true, false)
 	} else {
 		panic(nil)
 	}
