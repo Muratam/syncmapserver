@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"math/rand"
@@ -88,11 +90,7 @@ type SyncMapServer struct {
 	substanceAddress string
 	connectNum       MutexInt
 	mutex            sync.Mutex
-	Interpret        func(this *SyncMapServer, buf []byte) []byte
-}
-
-func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
-	return this.Interpret(this, buf)
+	interpret        func(this *SyncMapServer, buf []byte) []byte
 }
 
 func newMasterSyncMapServer(port int) *SyncMapServer {
@@ -119,14 +117,30 @@ func newMasterSyncMapServer(port int) *SyncMapServer {
 	// 起動終了までちょっと時間がかかるかもしれないので待機しておく
 	time.Sleep(10 * time.Millisecond)
 	// 何も設定しなければecho
-	this.Interpret = func(this *SyncMapServer, buf []byte) []byte { return buf }
+	this.interpret = func(this *SyncMapServer, buf []byte) []byte { return buf }
 	return this
 }
 func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	this := &SyncMapServer{}
 	this.substanceAddress = substanceAddress
-	this.Interpret = func(this *SyncMapServer, buf []byte) []byte { return buf }
+	this.interpret = func(this *SyncMapServer, buf []byte) []byte { return buf }
 	return this
+}
+func NewMasterOrSlaveSyncMapServer(
+	substanceAddress string,
+	isMaster bool,
+	interpret func(this *SyncMapServer, buf []byte) []byte) *SyncMapServer {
+
+	if isMaster {
+		port, _ := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
+		result := newMasterSyncMapServer(port)
+		result.interpret = interpret
+		return result
+	} else {
+		result := newSlaveSyncMapServer(substanceAddress)
+		result.interpret = interpret
+		return result
+	}
 }
 
 // SyncMapServer
@@ -162,104 +176,111 @@ func (this *SyncMapServer) LockAll() {
 func (this *SyncMapServer) UnlockAll() {
 	this.mutex.Unlock()
 }
-func (this *SyncMapServer) Send(f func() []byte) []byte {
+func (this *SyncMapServer) send(f func() []byte) []byte {
 	if this.IsOnThisApp() {
 		return this.interpretWrapFunction(f())
 	} else {
 		return this.sendBySlave(f)
 	}
 }
-func NewMasterOrSlaveSyncMapServer(substanceAddress string, isMaster bool) *SyncMapServer {
-	if isMaster {
-		port, _ := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
-		return newMasterSyncMapServer(port)
-	} else {
-		return newSlaveSyncMapServer(substanceAddress)
+
+const syncMapCommandLen = 4
+
+var syncMapCustomCommand = []byte("CUS:") // custom
+var syncMapLoadCommand = []byte("LOD:")   // load
+var syncMapStoreCommand = []byte("STO:")  // store
+var syncMapIncCommand = []byte("INC:")    // +1 (as number)
+var syncMapDecCommand = []byte("DEC:")    // -1 (as number)
+
+func (this *SyncMapServer) Send(f func() []byte) []byte {
+	return this.send(func() []byte {
+		return append(syncMapCustomCommand, f()...)
+	})
+}
+func EncodeToBytes(x interface{}) []byte {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(x); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+// NOTE: 変更できるようにpointer型で受け取ること
+func DecodeFromBytes(bytes_ []byte, x interface{}) {
+	var buf bytes.Buffer
+	buf.Write(bytes_)
+	dec := gob.NewDecoder(&buf)
+	err := dec.Decode(x)
+	if err != nil {
+		panic(err)
 	}
 }
 
-/*
-func (this *SyncMapServer) Load(key interface{}) (value interface{}, ok bool) {
-	if this.IsOnThisApp() {
-		return this.SyncMap.Load(key)
-	} else { // やっていき？
-		return this.SyncMap.Load(key)
+// 自身の SyncMapからLoad
+// NOTE: 変更できるようにpointer型で受け取ること
+func (this *SyncMapServer) LoadDirect(key string, res interface{}) bool {
+	value, ok := this.SyncMap.Load(key)
+	if ok {
+		DecodeFromBytes(value.([]byte), res)
 	}
+	return ok
 }
-func (this *SyncMapServer) Store(key, value interface{}) {
-	if this.IsOnThisApp() {
-		this.SyncMap.Store(key, value)
-	} else { // やっていき？
-		this.SyncMap.Store(key, value)
-	}
-}
-func (m *SyncMapServer) LoadBytesDirect(key string) ([]byte, bool) {
-	val, ok := m.SyncMap.Load(key)
-	if !ok {
-		return []byte(""), false
-	}
-	return val.([]byte), true
-}
-func (m *SyncMapServer) StoreBytesDirect(key string, value []byte) {
-	m.SyncMap.Store(key, value)
-}
-*/
 
-func testSyncMapServer() {
-	address := "127.0.0.1:8888"
-	var masterSyncMapServer = NewMasterOrSlaveSyncMapServer(address, true)
-	// 直で保存する
-	masterSyncMapServer.SyncMap.Store("sum", 0)
-	// Interpret を変更すればいい感じになる。
-	masterSyncMapServer.Interpret = func(this *SyncMapServer, buf []byte) []byte {
-		this.LockAll()
-		x, _ := this.SyncMap.Load("sum")
-		this.SyncMap.Store("sum", x.(int)+1)
-		this.UnlockAll()
-		fmt.Println(x)
-		// command := string(buf[:4])
-		// // fmt.Println("Serve:", command, content)
-		// if strings.Compare(command, "GET ") == 0 {
-		// 	loaded, _ := this.Load(content)
-		// 	conn.Write(loaded)
-		// 	return
-		// } else if strings.Compare(command, "SET ") == 0 {
-		// 	splitted := strings.SplitN(content, "\n\n", 2) // WARN: キーに \n\nがあったら死ぬ
-		// 	if len(splitted) != 2 {
-		// 		conn.Write([]byte("x"))
-		// 	} else {
-		// 		this.Store(splitted[0], []byte(splitted[1]))
-		// 		conn.Write([]byte("o"))
-		// 	}
-		// 	return
-		// } else {	}
-		// 雑に echo
-		return buf
-	}
-	go func() {
-		var slaveSyncMapServer = NewMasterOrSlaveSyncMapServer(address, false)
-		slaveSyncMapServer.Interpret = masterSyncMapServer.Interpret
-		for i := 0; i < 10000; i++ {
-			go func() {
-				slaveSyncMapServer.Send(func() []byte {
-					return []byte("increment sum 1")
-				})
-				// fmt.Println(string(result), len(result))
-				// 	buf := []byte("GET iikanji")
-				// 	x, _ = strconv.Atoi(string(buf[:n]))
-				// 	buf := []byte("SET iikanji\n\n" + strconv.FormatInt(int64(x), 10))
-				// })
-			}()
+// 自身の SyncMapにStore
+func (this *SyncMapServer) StoreDirect(key string, value interface{}) {
+	encoded := EncodeToBytes(value)
+	this.SyncMap.Store(key, encoded)
+}
+
+// NOTE: 変更できるようにpointer型で受け取ること
+// Masterなら直に、SlaveならTCPでつないで実行
+func (this *SyncMapServer) Load(key string, res interface{}) bool {
+	if this.IsOnThisApp() {
+		return this.LoadDirect(key, res)
+	} else { // やっていき
+		loadedBytes := this.send(func() []byte {
+			return append(syncMapLoadCommand, []byte(key)...)
+		})
+		if len(loadedBytes) == 0 {
+			return false
 		}
-	}()
-	for { // 今回は無限に待機
-		time.Sleep(1000 * time.Millisecond)
+		DecodeFromBytes(loadedBytes, res)
+		return true
 	}
 }
 
-// 実際はこんな感じで使いたい
-// var globalSyncMapServer = NewMasterOrSlaveSyncMapServer("127.0.0.1:9000", false)
+// Masterなら直に、SlaveならTCPでつないで実行
+func (this *SyncMapServer) Store(key string, value interface{}) {
+	if this.IsOnThisApp() {
+		this.StoreDirect(key, value)
+	} else { // やっていき
+		// this.send(func() []byte {
+		// 	return append(syncMapStoreCommand, encoded...)
+		// })
+		panic(nil)
+	}
+}
 
-func main() {
-	testSyncMapServer()
+func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
+	// 最初の4文字は分岐用
+	if len(buf) <= syncMapCommandLen {
+		return []byte("")
+	}
+	command := buf[:syncMapCommandLen]
+	content := buf[syncMapCommandLen:]
+	if bytes.Compare(command, syncMapCustomCommand) == 0 {
+		return this.interpret(this, content)
+	} else if bytes.Compare(command, syncMapLoadCommand) == 0 {
+		// Load
+		key := string(content)
+		value, ok := this.SyncMap.Load(key)
+		if !ok {
+			return []byte("")
+		}
+		return value.([]byte)
+	} else if bytes.Compare(command, syncMapStoreCommand) == 0 {
+		return this.interpret(this, content)
+	} else {
+		panic(nil)
+	}
 }
