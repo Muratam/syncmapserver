@@ -47,20 +47,20 @@ func testSyncMapServer() {
 	masterSyncMapServer.Store("pos", pos)
 	for i := 0; i < 2000; i++ {
 		go func() {
-			slaveSyncMapServer.LockAll()
-			var p Pos
-			slaveSyncMapServer.Load("pos", &p)
-			p.X += 1
-			p.Y += 2
-			p.S += "a"
-			if len(p.S) > 10 {
-				p.S = "0"
-			}
-			slaveSyncMapServer.Store("pos", p)
-			slaveSyncMapServer.UnlockAll()
-			// if j%100 == 0 {
-			fmt.Println(p)
-			// }
+			slaveSyncMapServer.StartTransaction(func(tx *SyncMapServerTransaction) {
+				var p Pos
+				tx.Load("pos", &p)
+				p.X += 1
+				p.Y += 2
+				p.S += "a"
+				if len(p.S) > 10 {
+					p.S = "0"
+				}
+				tx.Store("pos", p)
+				// if j%100 == 0 {
+				fmt.Println(p)
+				// }
+			})
 		}()
 	}
 	for { // 今回は無限に待機

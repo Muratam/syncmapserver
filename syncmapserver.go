@@ -163,9 +163,11 @@ func NewMasterOrSlaveSyncMapServer(
 }
 
 // SyncMapServer
-func (this *SyncMapServer) sendBySlave(f func() []byte) []byte {
-	for this.connectNum.Get() > maxSyncMapServerConnectionNum {
-		time.Sleep(time.Duration(100+rand.Intn(400)) * time.Nanosecond)
+func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
+	if !force {
+		for this.connectNum.Get() > maxSyncMapServerConnectionNum {
+			time.Sleep(time.Duration(100+rand.Intn(400)) * time.Nanosecond)
+		}
 	}
 	this.connectNum.Inc()
 	conn, err := net.Dial("tcp", this.substanceAddress)
@@ -176,7 +178,7 @@ func (this *SyncMapServer) sendBySlave(f func() []byte) []byte {
 		}
 		time.Sleep(1 * time.Millisecond)
 		this.connectNum.Dec()
-		return this.sendBySlave(f)
+		return this.sendBySlave(f, force)
 	}
 	conn.Write(f())
 	result := readAll(&conn)
@@ -188,15 +190,6 @@ func (this *SyncMapServer) sendBySlave(f func() []byte) []byte {
 // public methods
 func (this *SyncMapServer) IsOnThisApp() bool {
 	return len(this.substanceAddress) == 0
-}
-
-// 生のbyteを送信
-func (this *SyncMapServer) send(f func() []byte) []byte {
-	if this.IsOnThisApp() {
-		return this.interpretWrapFunction(f())
-	} else {
-		return this.sendBySlave(f)
-	}
 }
 
 // 自身の SyncMapからLoad
@@ -218,13 +211,15 @@ func (this *SyncMapServer) StoreDirect(key string, value interface{}) {
 var syncMapCustomCommand = []byte("CT") // custom
 var syncMapLoadCommand = []byte("LD")   // load
 var syncMapStoreCommand = []byte("ST")  // store
-// TODO:
-var syncMapIncCommand = []byte("INC") // +1 (as number)
-var syncMapDecCommand = []byte("DEC") // -1 (as number)
 var syncMapLockAllCommand = []byte("LOCK")
 var syncMapUnlockAllCommand = []byte("UNLOCK")
-var syncMapLockKeyCommand = []byte("LOCK_K")
-var syncMapUnlockKeyCommand = []byte("UNLOCK_K")
+var syncMapIncCommand = []byte("INC")            // +1 (as number) TODO:
+var syncMapDecCommand = []byte("DEC")            // -1 (as number) TODO:
+var syncMapLockKeyCommand = []byte("LOCK_K")     // lock a key     TODO:
+var syncMapUnlockKeyCommand = []byte("UNLOCK_K") // unlock a key   TODO:
+type SyncMapServerTransaction struct {
+	server *SyncMapServer
+}
 
 func join(input [][]byte) []byte {
 	return EncodeToBytes(input)
@@ -235,18 +230,33 @@ func split(input []byte) [][]byte {
 	return result
 }
 
-func (this *SyncMapServer) Send(f func() []byte) []byte {
+// 生のbyteを送信
+func (this *SyncMapServer) send(f func() []byte, force bool) []byte {
+	if this.IsOnThisApp() {
+		return this.interpretWrapFunction(f())
+	} else {
+		return this.sendBySlave(f, force)
+	}
+}
+
+func (this *SyncMapServer) sendImpl(f func() []byte, force bool) []byte {
 	return this.send(func() []byte {
 		return join([][]byte{
 			syncMapCustomCommand,
 			f(),
 		})
-	})
+	}, force)
+}
+func (this *SyncMapServer) Send(f func() []byte) []byte {
+	return this.sendImpl(f, false)
+}
+func (this *SyncMapServerTransaction) Send(f func() []byte) []byte {
+	return this.server.sendImpl(f, true)
 }
 
 // NOTE: 変更できるようにpointer型で受け取ること
 // Masterなら直に、SlaveならTCPでつないで実行
-func (this *SyncMapServer) Load(key string, res interface{}) bool {
+func (this *SyncMapServer) loadImpl(key string, res interface{}, force bool) bool {
 	if this.IsOnThisApp() {
 		return this.LoadDirect(key, res)
 	} else { // やっていき
@@ -255,7 +265,7 @@ func (this *SyncMapServer) Load(key string, res interface{}) bool {
 				syncMapLoadCommand,
 				[]byte(key),
 			})
-		})
+		}, force)
 		if len(loadedBytes) == 0 {
 			return false
 		}
@@ -263,9 +273,15 @@ func (this *SyncMapServer) Load(key string, res interface{}) bool {
 		return true
 	}
 }
+func (this *SyncMapServer) Load(key string, res interface{}) bool {
+	return this.loadImpl(key, res, false)
+}
+func (this *SyncMapServerTransaction) Load(key string, res interface{}) bool {
+	return this.server.loadImpl(key, res, true)
+}
 
 // Masterなら直に、SlaveならTCPでつないで実行
-func (this *SyncMapServer) Store(key string, value interface{}) {
+func (this *SyncMapServer) storeImpl(key string, value interface{}, force bool) {
 	if this.IsOnThisApp() {
 		this.StoreDirect(key, value)
 	} else { // やっていき
@@ -275,10 +291,16 @@ func (this *SyncMapServer) Store(key string, value interface{}) {
 				[]byte(key),
 				EncodeToBytes(value),
 			})
-		})
+		}, force)
 	}
 }
-func (this *SyncMapServer) LockAll() {
+func (this *SyncMapServer) Store(key string, value interface{}) {
+	this.storeImpl(key, value, false)
+}
+func (this *SyncMapServerTransaction) Store(key string, value interface{}) {
+	this.server.storeImpl(key, value, true)
+}
+func (this *SyncMapServer) StartTransaction(f func(this *SyncMapServerTransaction)) {
 	if this.IsOnThisApp() {
 		this.mutex.Lock()
 	} else { // やっていき
@@ -286,18 +308,23 @@ func (this *SyncMapServer) LockAll() {
 			return join([][]byte{
 				syncMapLockAllCommand,
 			})
-		})
+		}, false)
 	}
+	var tx SyncMapServerTransaction
+	tx.server = this
+	f(&tx)
+	tx.endTransaction()
 }
-func (this *SyncMapServer) UnlockAll() {
-	if this.IsOnThisApp() {
-		this.mutex.Unlock()
+
+func (this *SyncMapServerTransaction) endTransaction() {
+	if this.server.IsOnThisApp() {
+		this.server.mutex.Unlock()
 	} else { // やっていき
-		this.send(func() []byte {
+		this.server.send(func() []byte {
 			return join([][]byte{
 				syncMapUnlockAllCommand,
 			})
-		})
+		}, true)
 	}
 }
 
@@ -307,7 +334,6 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		panic(nil)
 	}
 	command := ss[0]
-	fmt.Println(string(command))
 	if bytes.Compare(command, syncMapCustomCommand) == 0 {
 		return this.SendImpl(this, ss[1])
 	} else if bytes.Compare(command, syncMapLoadCommand) == 0 {
@@ -316,7 +342,6 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		if !ok {
 			return []byte("")
 		}
-		fmt.Println(value.([]byte))
 		return value.([]byte)
 	} else if bytes.Compare(command, syncMapStoreCommand) == 0 {
 		key := string(ss[1])
