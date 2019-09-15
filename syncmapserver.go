@@ -208,11 +208,13 @@ func (this *SyncMapServer) StoreDirect(key string, value interface{}) {
 	this.SyncMap.Store(key, encoded)
 }
 
-var syncMapCustomCommand = []byte("CT") // custom
-var syncMapLoadCommand = []byte("LD")   // load
-var syncMapStoreCommand = []byte("ST")  // store
-var syncMapLockAllCommand = []byte("LOCK")
-var syncMapUnlockAllCommand = []byte("UNLOCK")
+var syncMapCustomCommand = []byte("CT")          // custom
+var syncMapLoadCommand = []byte("LD")            // load
+var syncMapStoreCommand = []byte("ST")           // store
+var syncMapDeleteCommand = []byte("DEL")         // delete TODO:
+var syncMapLengthCommand = []byte("LEN")         // key count TODO:
+var syncMapLockAllCommand = []byte("LOCK")       // start transaction TODO: lock timeout
+var syncMapUnlockAllCommand = []byte("UNLOCK")   // end transaction
 var syncMapAddCommand = []byte("ADD")            // add value
 var syncMapLockKeyCommand = []byte("LOCK_K")     // lock a key     TODO:
 var syncMapUnlockKeyCommand = []byte("UNLOCK_K") // unlock a key   TODO:
@@ -357,9 +359,7 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		panic(nil)
 	}
 	command := ss[0]
-	if bytes.Compare(command, syncMapCustomCommand) == 0 {
-		return this.SendImpl(this, ss[1])
-	} else if bytes.Compare(command, syncMapLoadCommand) == 0 {
+	if bytes.Compare(command, syncMapLoadCommand) == 0 {
 		key := string(ss[1])
 		value, ok := this.SyncMap.Load(key)
 		if !ok {
@@ -388,6 +388,8 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		this.StoreDirect(key, x)
 		this.mutex.Unlock()
 		return EncodeToBytes(x)
+	} else if bytes.Compare(command, syncMapCustomCommand) == 0 {
+		return this.SendImpl(this, ss[1])
 	} else {
 		panic(nil)
 	}

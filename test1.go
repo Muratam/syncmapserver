@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"time"
+	"sync"
 )
 
 type Pos struct {
@@ -20,7 +20,7 @@ func DefaultSendFunction(this *SyncMapServer, buf []byte) []byte {
 func testSyncMapServer() {
 	address := "127.0.0.1:8888"
 	var masterSyncMapServer = NewMasterOrSlaveSyncMapServer(address, true, DefaultSendFunction)
-	var slaveSyncMapServer = NewMasterOrSlaveSyncMapServer(address, false, DefaultSendFunction)
+	// var slaveSyncMapServer = NewMasterOrSlaveSyncMapServer(address, false, DefaultSendFunction)
 	// # 同期的メソッド
 	// pos := Pos{0, 0, ""}
 	// masterSyncMapServer.Store("pos", pos)
@@ -43,15 +43,16 @@ func testSyncMapServer() {
 	// 	}()
 	// }
 	masterSyncMapServer.Store("x", 0)
+	wg := sync.WaitGroup{}
 	for i := 0; i < 2000; i++ {
+		wg.Add(1)
 		go func() {
-			x := slaveSyncMapServer.Add("x", 1)
+			defer wg.Done()
+			x := masterSyncMapServer.Add("x", 1)
 			fmt.Println(x)
 		}()
 	}
-	for { // 今回は無限に待機
-		time.Sleep(1000 * time.Millisecond)
-	}
+	wg.Wait()
 }
 
 func main() {
