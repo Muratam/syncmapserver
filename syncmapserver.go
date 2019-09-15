@@ -91,6 +91,10 @@ type SyncMapServer struct {
 	Interpret        func(this *SyncMapServer, buf []byte) []byte
 }
 
+func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
+	return this.Interpret(this, buf)
+}
+
 func newMasterSyncMapServer(port int) *SyncMapServer {
 	this := &SyncMapServer{}
 	this.substanceAddress = ""
@@ -107,12 +111,14 @@ func newMasterSyncMapServer(port int) *SyncMapServer {
 				continue
 			}
 			go func() {
-				conn.Write(this.Interpret(this, readAll(&conn)))
+				conn.Write(this.interpretWrapFunction(readAll(&conn)))
 				conn.Close()
 			}()
 		}
 	}()
-	time.Sleep(10 * time.Millisecond) // NOTE: 起動終了までちょっと時間がかかるかもしれないので待機しておく
+	// 起動終了までちょっと時間がかかるかもしれないので待機しておく
+	time.Sleep(10 * time.Millisecond)
+	// 何も設定しなければecho
 	this.Interpret = func(this *SyncMapServer, buf []byte) []byte { return buf }
 	return this
 }
@@ -158,7 +164,7 @@ func (this *SyncMapServer) UnlockAll() {
 }
 func (this *SyncMapServer) Send(f func() []byte) []byte {
 	if this.IsOnThisApp() {
-		return this.Interpret(this, f())
+		return this.interpretWrapFunction(f())
 	} else {
 		return this.sendBySlave(f)
 	}
@@ -227,7 +233,7 @@ func testSyncMapServer() {
 		// 	}
 		// 	return
 		// } else {	}
-		// 雑に echo サーバー
+		// 雑に echo
 		return buf
 	}
 	go func() {
@@ -246,7 +252,7 @@ func testSyncMapServer() {
 			}()
 		}
 	}()
-	for { // 通常はGojiとかのサブとして使う。今回は無限に待機
+	for { // 今回は無限に待機
 		time.Sleep(1000 * time.Millisecond)
 	}
 }
