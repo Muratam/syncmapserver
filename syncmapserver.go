@@ -213,26 +213,28 @@ func (this *SyncMapServer) StoreDirect(key string, value interface{}) {
 	this.SyncMap.Store(key, encoded)
 }
 
-// TODO: transaction中にno transactionなものが値を変えてくる可能性が十分にある
+// NOTE: transaction中にno transactionなものが値を変えてくる可能性が十分にある
 //       特に STORE / DELETE はやっかい。だが、たいていこれらはTransactionがついているはずなのでそこまで注意をしなくてもよいのではないか
-var syncMapCustomCommand = []byte("CT")          // custom
-var syncMapLoadCommand = []byte("LD")            // load
-var syncMapStoreCommand = []byte("ST")           // store
-var syncMapLockAllCommand = []byte("LOCK")       // start transaction WARN: no lock timeout
-var syncMapUnlockAllCommand = []byte("UNLOCK")   // end transaction
-var syncMapAddCommand = []byte("ADD")            // add value
-var syncMapExistsKeyCommand = []byte("EXISTS")   // check if exists key WARN: no test
-var syncMapDeleteCommand = []byte("DEL")         // delete WARN: no test
-var syncMapLengthCommand = []byte("LEN")         // key count TODO:
-var syncMapLockKeyCommand = []byte("LOCK_K")     // lock a key     TODO:
-var syncMapUnlockKeyCommand = []byte("UNLOCK_K") // unlock a key   TODO:
-// TODO: list (内部的に([]byte ではなく [][]byte として保存しているので) Store / Load は使えない)
+var syncMapCustomCommand = []byte("CT")        // custom
+var syncMapLoadCommand = []byte("LD")          // load
+var syncMapStoreCommand = []byte("ST")         // store
+var syncMapLockAllCommand = []byte("LOCK")     // start transaction WARN: no lock timeout
+var syncMapUnlockAllCommand = []byte("UNLOCK") // end transaction
+var syncMapAddCommand = []byte("ADD")          // add value
+var syncMapExistsKeyCommand = []byte("EXISTS") // check if exists key WARN: no test
+var syncMapDeleteCommand = []byte("DEL")       // delete WARN: no test
+// list (内部的に([]byte ではなく [][]byte として保存しているので) Store / Load は使えない)
+// 順序が関係ないものに使うと吉
 var syncMapInitListCommand = []byte("INIT_LIST")     // init list
 var syncMapAppendListCommand = []byte("APPEND_LIST") // append value to list(空でも可能)
 var syncMapLenListCommand = []byte("LEN_LIST")       // len of list
 var syncMapIndexListCommand = []byte("INDEX_LIST")   // get value from list
 var syncMapUpdateListCommand = []byte("UPDATE_LIST") // update value at index
-// WARN: no GET_ALL
+// WARN: no LIST_GET_ALL
+// var syncMapLengthCommand = []byte("LEN")         // key count TODO:
+// var syncMapLockKeyCommand = []byte("LOCK_K")     // lock a key     TODO:
+// var syncMapUnlockKeyCommand = []byte("UNLOCK_K") // unlock a key   TODO:
+
 type SyncMapServerTransaction struct {
 	server *SyncMapServer
 }
