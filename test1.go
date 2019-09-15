@@ -41,22 +41,23 @@ func SendImpl(this *SyncMapServer, buf []byte) []byte {
 func testSyncMapServer() {
 	address := "127.0.0.1:8888"
 	var masterSyncMapServer = NewMasterOrSlaveSyncMapServer(address, true, SendImpl)
-	// var slaveSyncMapServer =	NewMasterOrSlaveSyncMapServer(address, false, SendImpl)
+	var slaveSyncMapServer = NewMasterOrSlaveSyncMapServer(address, false, SendImpl)
 	// # 同期的メソッド
 	pos := Pos{0, 0, ""}
 	masterSyncMapServer.Store("pos", pos)
-	for i := 0; i < 1000; i++ {
-		// j := i
+	for i := 0; i < 2000; i++ {
 		go func() {
+			slaveSyncMapServer.LockAll()
 			var p Pos
-			masterSyncMapServer.Load("pos", &p)
+			slaveSyncMapServer.Load("pos", &p)
 			p.X += 1
 			p.Y += 2
 			p.S += "a"
 			if len(p.S) > 10 {
 				p.S = "0"
 			}
-			masterSyncMapServer.Store("pos", p)
+			slaveSyncMapServer.Store("pos", p)
+			slaveSyncMapServer.UnlockAll()
 			// if j%100 == 0 {
 			fmt.Println(p)
 			// }

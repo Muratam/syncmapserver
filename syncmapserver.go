@@ -189,12 +189,6 @@ func (this *SyncMapServer) sendBySlave(f func() []byte) []byte {
 func (this *SyncMapServer) IsOnThisApp() bool {
 	return len(this.substanceAddress) == 0
 }
-func (this *SyncMapServer) LockAll() {
-	this.mutex.Lock()
-}
-func (this *SyncMapServer) UnlockAll() {
-	this.mutex.Unlock()
-}
 
 // 生のbyteを送信
 func (this *SyncMapServer) send(f func() []byte) []byte {
@@ -224,8 +218,14 @@ func (this *SyncMapServer) StoreDirect(key string, value interface{}) {
 var syncMapCustomCommand = []byte("CT") // custom
 var syncMapLoadCommand = []byte("LD")   // load
 var syncMapStoreCommand = []byte("ST")  // store
-var syncMapIncCommand = []byte("INC")   // +1 (as number)
-var syncMapDecCommand = []byte("DEC")   // -1 (as number)
+// TODO:
+var syncMapIncCommand = []byte("INC") // +1 (as number)
+var syncMapDecCommand = []byte("DEC") // -1 (as number)
+var syncMapLockAllCommand = []byte("LOCK")
+var syncMapUnlockAllCommand = []byte("UNLOCK")
+var syncMapLockKeyCommand = []byte("LOCK_K")
+var syncMapUnlockKeyCommand = []byte("UNLOCK_K")
+
 func join(input [][]byte) []byte {
 	return EncodeToBytes(input)
 }
@@ -278,13 +278,36 @@ func (this *SyncMapServer) Store(key string, value interface{}) {
 		})
 	}
 }
+func (this *SyncMapServer) LockAll() {
+	if this.IsOnThisApp() {
+		this.mutex.Lock()
+	} else { // やっていき
+		this.send(func() []byte {
+			return join([][]byte{
+				syncMapLockAllCommand,
+			})
+		})
+	}
+}
+func (this *SyncMapServer) UnlockAll() {
+	if this.IsOnThisApp() {
+		this.mutex.Unlock()
+	} else { // やっていき
+		this.send(func() []byte {
+			return join([][]byte{
+				syncMapUnlockAllCommand,
+			})
+		})
+	}
+}
 
 func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 	ss := split(buf)
-	if len(ss) <= 1 {
+	if len(ss) < 1 {
 		panic(nil)
 	}
 	command := ss[0]
+	fmt.Println(string(command))
 	if bytes.Compare(command, syncMapCustomCommand) == 0 {
 		return this.SendImpl(this, ss[1])
 	} else if bytes.Compare(command, syncMapLoadCommand) == 0 {
@@ -293,11 +316,18 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		if !ok {
 			return []byte("")
 		}
+		fmt.Println(value.([]byte))
 		return value.([]byte)
 	} else if bytes.Compare(command, syncMapStoreCommand) == 0 {
 		key := string(ss[1])
 		value := ss[2]
 		this.SyncMap.Store(key, value)
+		return []byte("")
+	} else if bytes.Compare(command, syncMapLockAllCommand) == 0 {
+		this.mutex.Lock() // 永遠にロックしたらやだなー
+		return []byte("")
+	} else if bytes.Compare(command, syncMapUnlockAllCommand) == 0 {
+		this.mutex.Unlock()
 		return []byte("")
 	} else {
 		panic(nil)
