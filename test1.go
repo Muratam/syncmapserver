@@ -57,13 +57,21 @@ func testSyncMapServer() {
 		j := i
 		go func() {
 			defer wg.Done()
-			masterSyncMapServer.AppendList("x", j)
+			index := masterSyncMapServer.AppendList("x", j)
+			val := 0
+			masterSyncMapServer.LoadFromListAtIndexImpl("x", index, &val)
+			val = val*100000 + val*2
+			masterSyncMapServer.UpdateListAtIndexImpl("x", index, val)
 			l := masterSyncMapServer.LenOfList("x")
-			// Update / load
 			fmt.Println(j+1, l)
 		}()
 	}
 	wg.Wait()
+	for i := 0; i < 2000; i++ {
+		x := 0
+		masterSyncMapServer.LoadFromListAtIndexImpl("x", i, &x)
+		fmt.Println(x)
+	}
 	// all, _ := masterSyncMapServer.SyncMap.Load("x")
 	// for _, a := range all.([][]byte) {
 	// 	x := 0

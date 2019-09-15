@@ -232,7 +232,7 @@ var syncMapAppendListCommand = []byte("APPEND_LIST") // append value to list(空
 var syncMapLenListCommand = []byte("LEN_LIST")       // len of list
 var syncMapIndexListCommand = []byte("INDEX_LIST")   // get value from list
 var syncMapUpdateListCommand = []byte("UPDATE_LIST") // update value at index
-
+// WARN: no GET_ALL
 type SyncMapServerTransaction struct {
 	server *SyncMapServer
 }
@@ -442,16 +442,19 @@ func (this *SyncMapServerTransaction) InitList(key string) {
 
 // index を返す
 func (this *SyncMapServer) appendListImpl(key string, value interface{}, forceDirect, forceConnection bool) int {
-	encoded := EncodeToBytes(value)
 	if forceDirect || this.IsOnThisApp() {
-		this.mutex.Lock() // TODO: クソ雑ロック
+		this.mutex.Lock() // TODO: クソ雑ロック(特定のキーだけロックしておきたい)
 		elist, ok := this.SyncMap.Load(key)
 		if !ok {
 			this.SyncMap.Store(key, make([][]byte, 0))
 			elist, _ = this.SyncMap.Load(key)
 		}
 		list := elist.([][]byte)
-		list = append(list, encoded)
+		if forceDirect {
+			list = append(list, value.([]byte))
+		} else {
+			list = append(list, EncodeToBytes(value))
+		}
 		this.SyncMap.Store(key, list)
 		this.mutex.Unlock()
 		return len(list) - 1
@@ -460,7 +463,7 @@ func (this *SyncMapServer) appendListImpl(key string, value interface{}, forceDi
 			return join([][]byte{
 				syncMapAppendListCommand,
 				[]byte(key),
-				encoded,
+				EncodeToBytes(value),
 			})
 		}, forceConnection)
 		x := 0
@@ -503,14 +506,11 @@ func (this *SyncMapServerTransaction) LenOfList(key string) int {
 }
 
 // NOTE: value はロード可能なようにpointerを渡すこと
-func (this *SyncMapServer) loadFromListAtIndexImpl(key string, index int, value interface{}, forceDirect, forceConnection bool) {
-	if forceDirect || this.IsOnThisApp() {
+func (this *SyncMapServer) loadFromListAtIndexImpl(key string, index int, value interface{}, forceConnection bool) {
+	if this.IsOnThisApp() {
 		elist, ok := this.SyncMap.Load(key)
-		if !ok || index < 0 {
-			panic(nil)
-		}
 		list := elist.([][]byte)
-		if index >= len(list) {
+		if !ok || index < 0 || index >= len(list) {
 			panic(nil)
 		}
 		DecodeFromBytes(list[index], value)
@@ -526,10 +526,10 @@ func (this *SyncMapServer) loadFromListAtIndexImpl(key string, index int, value 
 	}
 }
 func (this *SyncMapServer) LoadFromListAtIndexImpl(key string, index int, value interface{}) {
-	this.loadFromListAtIndexImpl(key, index, value, false, false)
+	this.loadFromListAtIndexImpl(key, index, value, false)
 }
 func (this *SyncMapServerTransaction) LoadFromListAtIndexImpl(key string, index int, value interface{}) {
-	this.server.loadFromListAtIndexImpl(key, index, value, false, true)
+	this.server.loadFromListAtIndexImpl(key, index, value, true)
 }
 
 func (this *SyncMapServer) updateListAtIndexImpl(key string, index int, value interface{}, forceDirect, forceConnection bool) {
@@ -542,7 +542,11 @@ func (this *SyncMapServer) updateListAtIndexImpl(key string, index int, value in
 		if index >= len(list) {
 			panic(nil)
 		}
-		list[index] = EncodeToBytes(value)
+		if forceDirect {
+			list[index] = value.([]byte)
+		} else {
+			list[index] = EncodeToBytes(value)
+		}
 	} else {
 		this.send(func() []byte {
 			return join([][]byte{
@@ -596,6 +600,30 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 	} else if bytes.Compare(command, syncMapExistsKeyCommand) == 0 {
 		ok := this.exitstsImpl(string(ss[1]), true, false)
 		return EncodeToBytes(ok)
+	} else if bytes.Compare(command, syncMapInitListCommand) == 0 {
+		this.initListImpl(string(ss[1]), true, false)
+		return []byte("")
+	} else if bytes.Compare(command, syncMapAppendListCommand) == 0 {
+		x := this.appendListImpl(string(ss[1]), ss[2], true, false)
+		return EncodeToBytes(x)
+	} else if bytes.Compare(command, syncMapLenListCommand) == 0 {
+		x := this.lenOfListImpl(string(ss[1]), true, false)
+		return EncodeToBytes(x)
+	} else if bytes.Compare(command, syncMapIndexListCommand) == 0 {
+		key := string(ss[1]) // バイト列をそのまま保存するので そのまま使えない
+		index := 0
+		DecodeFromBytes(ss[2], &index)
+		elist, ok := this.SyncMap.Load(key)
+		list := elist.([][]byte)
+		if !ok || index < 0 || index >= len(list) {
+			panic(nil)
+		}
+		return list[index]
+	} else if bytes.Compare(command, syncMapUpdateListCommand) == 0 {
+		index := 0
+		DecodeFromBytes(ss[2], &index)
+		this.updateListAtIndexImpl(string(ss[1]), index, ss[3], true, false)
+		return []byte("")
 	} else if bytes.Compare(command, syncMapCustomCommand) == 0 {
 		return this.sendCustomImpl(func() []byte { return ss[1] }, true, false)
 	} else {
