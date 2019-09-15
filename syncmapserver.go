@@ -83,6 +83,25 @@ func readAll(conn *net.Conn) []byte {
 	return bufAll
 }
 
+func EncodeToBytes(x interface{}) []byte {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(x); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+// NOTE: 変更できるようにpointer型で受け取ること
+func DecodeFromBytes(bytes_ []byte, x interface{}) {
+	var buf bytes.Buffer
+	buf.Write(bytes_)
+	dec := gob.NewDecoder(&buf)
+	err := dec.Decode(x)
+	if err != nil {
+		panic(err)
+	}
+}
+
 // SyncMapServer
 // とりあえず string -> byte[] で
 type SyncMapServer struct {
@@ -90,7 +109,7 @@ type SyncMapServer struct {
 	substanceAddress string
 	connectNum       MutexInt
 	mutex            sync.Mutex
-	interpret        func(this *SyncMapServer, buf []byte) []byte
+	SendImpl         func(this *SyncMapServer, buf []byte) []byte
 }
 
 func newMasterSyncMapServer(port int) *SyncMapServer {
@@ -117,28 +136,28 @@ func newMasterSyncMapServer(port int) *SyncMapServer {
 	// 起動終了までちょっと時間がかかるかもしれないので待機しておく
 	time.Sleep(10 * time.Millisecond)
 	// 何も設定しなければecho
-	this.interpret = func(this *SyncMapServer, buf []byte) []byte { return buf }
+	this.SendImpl = func(this *SyncMapServer, buf []byte) []byte { return buf }
 	return this
 }
 func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	this := &SyncMapServer{}
 	this.substanceAddress = substanceAddress
-	this.interpret = func(this *SyncMapServer, buf []byte) []byte { return buf }
+	this.SendImpl = func(this *SyncMapServer, buf []byte) []byte { return buf }
 	return this
 }
 func NewMasterOrSlaveSyncMapServer(
 	substanceAddress string,
 	isMaster bool,
-	interpret func(this *SyncMapServer, buf []byte) []byte) *SyncMapServer {
+	SendImpl func(this *SyncMapServer, buf []byte) []byte) *SyncMapServer {
 
 	if isMaster {
 		port, _ := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
 		result := newMasterSyncMapServer(port)
-		result.interpret = interpret
+		result.SendImpl = SendImpl
 		return result
 	} else {
 		result := newSlaveSyncMapServer(substanceAddress)
-		result.interpret = interpret
+		result.SendImpl = SendImpl
 		return result
 	}
 }
@@ -176,43 +195,13 @@ func (this *SyncMapServer) LockAll() {
 func (this *SyncMapServer) UnlockAll() {
 	this.mutex.Unlock()
 }
+
+// 生のbyteを送信
 func (this *SyncMapServer) send(f func() []byte) []byte {
 	if this.IsOnThisApp() {
 		return this.interpretWrapFunction(f())
 	} else {
 		return this.sendBySlave(f)
-	}
-}
-
-const syncMapCommandLen = 4
-
-var syncMapCustomCommand = []byte("CUS:") // custom
-var syncMapLoadCommand = []byte("LOD:")   // load
-var syncMapStoreCommand = []byte("STO:")  // store
-var syncMapIncCommand = []byte("INC:")    // +1 (as number)
-var syncMapDecCommand = []byte("DEC:")    // -1 (as number)
-
-func (this *SyncMapServer) Send(f func() []byte) []byte {
-	return this.send(func() []byte {
-		return append(syncMapCustomCommand, f()...)
-	})
-}
-func EncodeToBytes(x interface{}) []byte {
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(x); err != nil {
-		panic(err)
-	}
-	return buf.Bytes()
-}
-
-// NOTE: 変更できるようにpointer型で受け取ること
-func DecodeFromBytes(bytes_ []byte, x interface{}) {
-	var buf bytes.Buffer
-	buf.Write(bytes_)
-	dec := gob.NewDecoder(&buf)
-	err := dec.Decode(x)
-	if err != nil {
-		panic(err)
 	}
 }
 
@@ -232,6 +221,29 @@ func (this *SyncMapServer) StoreDirect(key string, value interface{}) {
 	this.SyncMap.Store(key, encoded)
 }
 
+var syncMapCustomCommand = []byte("CT") // custom
+var syncMapLoadCommand = []byte("LD")   // load
+var syncMapStoreCommand = []byte("ST")  // store
+var syncMapIncCommand = []byte("INC")   // +1 (as number)
+var syncMapDecCommand = []byte("DEC")   // -1 (as number)
+func join(input [][]byte) []byte {
+	return EncodeToBytes(input)
+}
+func split(input []byte) [][]byte {
+	result := make([][]byte, 0)
+	DecodeFromBytes(input, &result)
+	return result
+}
+
+func (this *SyncMapServer) Send(f func() []byte) []byte {
+	return this.send(func() []byte {
+		return join([][]byte{
+			syncMapCustomCommand,
+			f(),
+		})
+	})
+}
+
 // NOTE: 変更できるようにpointer型で受け取ること
 // Masterなら直に、SlaveならTCPでつないで実行
 func (this *SyncMapServer) Load(key string, res interface{}) bool {
@@ -239,7 +251,10 @@ func (this *SyncMapServer) Load(key string, res interface{}) bool {
 		return this.LoadDirect(key, res)
 	} else { // やっていき
 		loadedBytes := this.send(func() []byte {
-			return append(syncMapLoadCommand, []byte(key)...)
+			return join([][]byte{
+				syncMapLoadCommand,
+				[]byte(key),
+			})
 		})
 		if len(loadedBytes) == 0 {
 			return false
@@ -254,32 +269,36 @@ func (this *SyncMapServer) Store(key string, value interface{}) {
 	if this.IsOnThisApp() {
 		this.StoreDirect(key, value)
 	} else { // やっていき
-		// this.send(func() []byte {
-		// 	return append(syncMapStoreCommand, encoded...)
-		// })
-		panic(nil)
+		this.send(func() []byte {
+			return join([][]byte{
+				syncMapStoreCommand,
+				[]byte(key),
+				EncodeToBytes(value),
+			})
+		})
 	}
 }
 
 func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
-	// 最初の4文字は分岐用
-	if len(buf) <= syncMapCommandLen {
-		return []byte("")
+	ss := split(buf)
+	if len(ss) <= 1 {
+		panic(nil)
 	}
-	command := buf[:syncMapCommandLen]
-	content := buf[syncMapCommandLen:]
+	command := ss[0]
 	if bytes.Compare(command, syncMapCustomCommand) == 0 {
-		return this.interpret(this, content)
+		return this.SendImpl(this, ss[1])
 	} else if bytes.Compare(command, syncMapLoadCommand) == 0 {
-		// Load
-		key := string(content)
+		key := string(ss[1])
 		value, ok := this.SyncMap.Load(key)
 		if !ok {
 			return []byte("")
 		}
 		return value.([]byte)
 	} else if bytes.Compare(command, syncMapStoreCommand) == 0 {
-		return this.interpret(this, content)
+		key := string(ss[1])
+		value := ss[2]
+		this.SyncMap.Store(key, value)
+		return []byte("")
 	} else {
 		panic(nil)
 	}
