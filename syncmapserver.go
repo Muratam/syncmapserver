@@ -112,6 +112,10 @@ type SyncMapServer struct {
 	SendImpl         func(this *SyncMapServer, buf []byte) []byte
 }
 
+func DefaultSendFunction(this *SyncMapServer, buf []byte) []byte {
+	return buf
+}
+
 func newMasterSyncMapServer(port int) *SyncMapServer {
 	this := &SyncMapServer{}
 	this.substanceAddress = ""
@@ -208,16 +212,21 @@ func (this *SyncMapServer) StoreDirect(key string, value interface{}) {
 	this.SyncMap.Store(key, encoded)
 }
 
-var syncMapCustomCommand = []byte("CT")          // custom
-var syncMapLoadCommand = []byte("LD")            // load
-var syncMapStoreCommand = []byte("ST")           // store
-var syncMapDeleteCommand = []byte("DEL")         // delete TODO:
-var syncMapLengthCommand = []byte("LEN")         // key count TODO:
-var syncMapLockAllCommand = []byte("LOCK")       // start transaction TODO: lock timeout
-var syncMapUnlockAllCommand = []byte("UNLOCK")   // end transaction
-var syncMapAddCommand = []byte("ADD")            // add value
-var syncMapLockKeyCommand = []byte("LOCK_K")     // lock a key     TODO:
-var syncMapUnlockKeyCommand = []byte("UNLOCK_K") // unlock a key   TODO:
+var syncMapCustomCommand = []byte("CT")              // custom
+var syncMapLoadCommand = []byte("LD")                // load
+var syncMapStoreCommand = []byte("ST")               // store
+var syncMapLockAllCommand = []byte("LOCK")           // start transaction WARN: no lock timeout
+var syncMapUnlockAllCommand = []byte("UNLOCK")       // end transaction
+var syncMapAddCommand = []byte("ADD")                // add value
+var syncMapExistsKeyCommand = []byte("EXISTS")       // check if exists key TODO:
+var syncMapDeleteCommand = []byte("DEL")             // delete TODO:
+var syncMapLengthCommand = []byte("LEN")             // key count TODO:
+var syncMapLockKeyCommand = []byte("LOCK_K")         // lock a key     TODO:
+var syncMapUnlockKeyCommand = []byte("UNLOCK_K")     // unlock a key   TODO:
+var syncMapAppendListCommand = []byte("APPEND_LIST") // append value to list TODO:
+var syncMapLenListCommand = []byte("LEN_LIST")       // len of list TODO:
+var syncMapIndexListCommand = []byte("INDEX_LIST")   // get value from list TODO:
+
 type SyncMapServerTransaction struct {
 	server *SyncMapServer
 }

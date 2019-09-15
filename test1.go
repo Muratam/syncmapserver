@@ -13,9 +13,6 @@ type Pos struct {
 
 // this.Send をしたときに全てここに行く
 // うまく書きにくいカスタムなコードを書くことができるよ
-func DefaultSendFunction(this *SyncMapServer, buf []byte) []byte {
-	return buf
-}
 
 func testSyncMapServer() {
 	address := "127.0.0.1:8888"
