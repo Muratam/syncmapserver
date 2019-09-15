@@ -213,8 +213,7 @@ var syncMapLoadCommand = []byte("LD")   // load
 var syncMapStoreCommand = []byte("ST")  // store
 var syncMapLockAllCommand = []byte("LOCK")
 var syncMapUnlockAllCommand = []byte("UNLOCK")
-var syncMapIncCommand = []byte("INC")            // +1 (as number) TODO:
-var syncMapDecCommand = []byte("DEC")            // -1 (as number) TODO:
+var syncMapAddCommand = []byte("ADD")            // add value
 var syncMapLockKeyCommand = []byte("LOCK_K")     // lock a key     TODO:
 var syncMapUnlockKeyCommand = []byte("UNLOCK_K") // unlock a key   TODO:
 type SyncMapServerTransaction struct {
@@ -300,6 +299,30 @@ func (this *SyncMapServer) Store(key string, value interface{}) {
 func (this *SyncMapServerTransaction) Store(key string, value interface{}) {
 	this.server.storeImpl(key, value, true)
 }
+
+// Masterなら直に、SlaveならTCPでつないで実行
+func (this *SyncMapServer) Add(key string, value int) int {
+	if this.IsOnThisApp() {
+		this.mutex.Lock()
+		x := 0
+		this.LoadDirect(key, &x)
+		x += value
+		this.StoreDirect(key, x)
+		this.mutex.Unlock()
+		return x
+	} else { // やっていき
+		x := this.send(func() []byte {
+			return join([][]byte{
+				syncMapAddCommand,
+				[]byte(key),
+				EncodeToBytes(value),
+			})
+		}, false)
+		result := 0
+		DecodeFromBytes(x, &result)
+		return result
+	}
+}
 func (this *SyncMapServer) StartTransaction(f func(this *SyncMapServerTransaction)) {
 	if this.IsOnThisApp() {
 		this.mutex.Lock()
@@ -349,11 +372,22 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		this.SyncMap.Store(key, value)
 		return []byte("")
 	} else if bytes.Compare(command, syncMapLockAllCommand) == 0 {
-		this.mutex.Lock() // 永遠にロックしたらやだなー
+		this.mutex.Lock()
 		return []byte("")
 	} else if bytes.Compare(command, syncMapUnlockAllCommand) == 0 {
 		this.mutex.Unlock()
 		return []byte("")
+	} else if bytes.Compare(command, syncMapAddCommand) == 0 {
+		key := string(ss[1])
+		x := 0
+		this.mutex.Lock()
+		this.LoadDirect(key, &x)
+		value := 0
+		DecodeFromBytes(ss[2], &value)
+		x += value
+		this.StoreDirect(key, x)
+		this.mutex.Unlock()
+		return EncodeToBytes(x)
 	} else {
 		panic(nil)
 	}
