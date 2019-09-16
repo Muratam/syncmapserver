@@ -49,20 +49,35 @@ func GetPlainPasswordByAccountName(name string) string {
 	smUserSlaveServer.Load(id, &u)
 	return u.PlainPassword
 }
-func main() {
-	for i := 0; i < 10; i++ {
-		InitUsersSM()
-		fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
-		fmt.Println(smUserSlaveServer.GetLen())
-		fmt.Println(accountNameToIDSlaveServer.GetLen())
+func transactionTest() {
+	for i := 0; i < 1000; i++ {
+		go func() {
+			if smUserSlaveServer.IsLockedKey("100") {
+				return
+			}
+			smUserSlaveServer.StartTransactionWithKey("100", func(tx *SyncMapServerTransaction) {
+				var u User
+				tx.Load("100", &u)
+				u.NumSellItems += 1
+				tx.Store("100", u)
+				fmt.Println(u)
+			})
+		}()
 	}
+}
+func main() {
+	InitUsersSM()
+	fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
+	fmt.Println(smUserSlaveServer.GetLen())
+	fmt.Println(accountNameToIDSlaveServer.GetLen())
+	transactionTest()
 	for i := 0; i < 50; i++ {
 		time.Sleep(time.Duration(1) * time.Second)
 		fmt.Println(i)
 	}
-	for i := 0; i < 10; i++ {
-		fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
-		fmt.Println(smUserSlaveServer.GetLen())
-		fmt.Println(accountNameToIDSlaveServer.GetLen())
-	}
+	// for i := 0; i < 10; i++ {
+	// 	fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
+	// 	fmt.Println(smUserSlaveServer.GetLen())
+	// 	fmt.Println(accountNameToIDSlaveServer.GetLen())
+	// }
 }

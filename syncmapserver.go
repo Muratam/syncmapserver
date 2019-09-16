@@ -134,7 +134,8 @@ type SyncMapServer struct {
 	connectNum           MutexInt
 	mutex                sync.Mutex
 	IsLocked             bool
-	mutexMap             sync.Map
+	mutexMap             sync.Map // string -> sync.Mutex
+	lockedMap            sync.Map // string -> bool
 	MySendCustomFunction func(this *SyncMapServer, buf []byte) []byte
 }
 
@@ -310,6 +311,7 @@ func (this *SyncMapServer) StoreDirect(key string, value interface{}) {
 	if !exists {
 		var m sync.Mutex
 		this.mutexMap.Store(key, &m)
+		this.lockedMap.Store(key, false)
 		this.KeyCount.Inc()
 	}
 	this.SyncMap.Store(key, value)
@@ -321,6 +323,7 @@ func (this *SyncMapServer) DeleteDirect(key string) {
 	}
 	this.SyncMap.Delete(key)
 	this.mutexMap.Delete(key)
+	this.lockedMap.Delete(key)
 	this.KeyCount.Dec()
 }
 func (this *SyncMapServer) StoreDirectAsBytes(key string, value interface{}) {
@@ -347,12 +350,15 @@ var syncMapUpdateListCommand = []byte("UPDATE_LIST") // update value at index
 // 現在は特定のキーのロックを見ていないのでそれと併用するとデッドロックするかも。
 var syncMapLockAllCommand = []byte("LOCK")     // start transaction (NOTE: no lock timeout)
 var syncMapUnlockAllCommand = []byte("UNLOCK") // end transaction
+var syncMapIsLockedAllCommand = []byte("ISLOCKED")
+
 // 特定のキーをLockする。
 // 現在は全体ロックを見ていないのでそれと併用するとデッドロックするかも。
 // それが解除されていれば、 特定のキーをロックする。
 var syncMapLockKeyCommand = []byte("LOCK_K")     // lock a key (NOTE: no lock timeout)
 var syncMapUnlockKeyCommand = []byte("UNLOCK_K") // unlock a key
-var syncMapLengthCommand = []byte("LEN")         // key count
+var syncMapIsLockedKeyCommand = []byte("ISLOCKED_K")
+var syncMapLengthCommand = []byte("LEN") // key count
 var syncMapClearAllCommand = []byte("CLEAR_ALL")
 
 // LIST_GET_ALL 欲しい？
@@ -472,6 +478,8 @@ func (this *SyncMapServer) ClearAllDirect() {
 	this.SyncMap = syncMap
 	var mutexMap sync.Map
 	this.mutexMap = mutexMap
+	var lockedMap sync.Map
+	this.lockedMap = lockedMap
 	var keyCount MutexInt
 	this.KeyCount = keyCount
 	// WARN: connectNum
@@ -569,6 +577,45 @@ func (this *SyncMapServer) addImpl(key string, value int, forceDirect bool) int 
 func (this *SyncMapServer) Add(key string, value int) int {
 	return this.addImpl(key, value, false)
 }
+func (this *SyncMapServer) isLockedAllImpl(forceDirect bool) bool {
+	if forceDirect || this.IsOnThisApp() {
+		return this.IsLocked
+	} else { // やっていき
+		x := this.send(func() []byte {
+			return join([][]byte{
+				syncMapIsLockedAllCommand,
+			})
+		}, false)
+		result := true
+		DecodeFromBytes(x, &result)
+		return result
+	}
+}
+func (this *SyncMapServer) IsLockedAll() bool {
+	return this.isLockedAllImpl(false)
+}
+func (this *SyncMapServer) isLockedKeyImpl(key string, forceDirect bool) bool {
+	if forceDirect || this.IsOnThisApp() {
+		locked, ok := this.lockedMap.Load(key)
+		if !ok {
+			return false // NOTE: 存在しない == ロックされていない
+		}
+		return locked.(bool)
+	} else { // やっていき
+		x := this.send(func() []byte {
+			return join([][]byte{
+				syncMapIsLockedKeyCommand,
+				[]byte(key),
+			})
+		}, false)
+		result := true
+		DecodeFromBytes(x, &result)
+		return result
+	}
+}
+func (this *SyncMapServer) IsLockedKey(key string) bool {
+	return this.isLockedKeyImpl(key, false)
+}
 
 func (this *SyncMapServer) LockAll() {
 	this.mutex.Lock()
@@ -584,12 +631,14 @@ func (this *SyncMapServer) LockKey(key string) {
 		panic(nil)
 	}
 	m.(*sync.Mutex).Lock()
+	this.lockedMap.Store(key, true)
 }
 func (this *SyncMapServer) UnlockKey(key string) {
 	m, ok := this.mutexMap.Load(key)
 	if !ok {
 		panic(nil)
 	}
+	this.lockedMap.Store(key, false)
 	m.(*sync.Mutex).Unlock()
 }
 
@@ -867,6 +916,10 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		DecodeFromBytes(ss[2], &index)
 		this.updateListAtIndexImpl(string(ss[1]), index, ss[3], true, false)
 		return []byte("")
+	} else if bytes.Compare(command, syncMapIsLockedAllCommand) == 0 {
+		return EncodeToBytes(this.isLockedAllImpl(true))
+	} else if bytes.Compare(command, syncMapIsLockedKeyCommand) == 0 {
+		return EncodeToBytes(this.isLockedKeyImpl(string(ss[1]), true))
 	} else if bytes.Compare(command, syncMapCustomCommand) == 0 {
 		return this.sendCustomImpl(func() []byte { return ss[1] }, true, false)
 	} else if bytes.Compare(command, syncMapClearAllCommand) == 0 {
