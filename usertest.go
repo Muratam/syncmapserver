@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 	// "time"
 )
@@ -36,10 +37,16 @@ func RegisterUserSM(u User) {
 	smUserServer.Store(id, u)
 	accountNameToIDServer.Store(u.AccountName, id)
 }
-func GetPlainPasswordByAccountName(name string) {
+func GetPlainPasswordByAccountName(name string) string {
 	var u User
 	id := ""
 	accountNameToIDServer.Load(name, &id)
 	smUserServer.Load(id, &u)
 	return u.PlainPassword
+}
+func main() {
+	InitUsersSM()
+	fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
+	fmt.Println(smUserServer.GetLen())
+	fmt.Println(accountNameToIDServer.GetLen())
 }

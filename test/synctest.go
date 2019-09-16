@@ -85,11 +85,11 @@ func redisIncl() {
 }
 func syncMapServerIncl() {
 	address := "127.0.0.1:8888"
-	var masterSyncMapServer = NewMasterOrSlaveSyncMapServer(address, true, DefaultSendFunction)
-	// var slaveSyncMapServer = NewMasterOrSlaveSyncMapServer(address, false, DefaultSendFunction)
+	var masterSyncMapServer = NewMasterOrSlaveSyncMapServer(address, true, DefaultSendCustomFunction)
+	var slaveSyncMapServer = NewMasterOrSlaveSyncMapServer(address, false, DefaultSendCustomFunction)
 	masterSyncMapServer.Store("x", 0)
 	times(max, func(x int) {
-		masterSyncMapServer.StartTransaction(func(tx *SyncMapServerTransaction) {
+		slaveSyncMapServer.StartTransactionWithKey("x", func(tx *SyncMapServerTransaction) {
 			x := 0
 			tx.Load("x", &x)
 			x += 1
@@ -98,8 +98,9 @@ func syncMapServerIncl() {
 		})
 	})
 	val := 0
-	masterSyncMapServer.Load("x", &val)
+	slaveSyncMapServer.Load("x", &val)
 	fmt.Println("count", val)
+	fmt.Println("keylen", slaveSyncMapServer.GetLen())
 }
 
 func main() {
