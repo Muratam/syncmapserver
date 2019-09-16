@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net"
 	"strconv"
@@ -14,6 +15,24 @@ import (
 )
 
 const maxSyncMapServerConnectionNum = 15
+const MasterServerAddress = "192.168.0.1"
+
+func IsMasterServerIP() bool {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return strings.Compare(localAddr.IP.String(), MasterServerAddress) == 0
+}
+func GetMasterServerAddress() string {
+	if IsMasterServerIP() {
+		return "127.0.0.1"
+	} else {
+		return MasterServerAddress
+	}
+}
 
 // MutexInt
 type MutexInt struct {
