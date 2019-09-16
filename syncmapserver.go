@@ -238,8 +238,8 @@ var syncMapCustomCommand = []byte("CT")        // custom
 var syncMapLoadCommand = []byte("LD")          // load
 var syncMapStoreCommand = []byte("ST")         // store
 var syncMapAddCommand = []byte("ADD")          // add value
-var syncMapExistsKeyCommand = []byte("EXISTS") // check if exists key WARN: no test
-var syncMapDeleteCommand = []byte("DEL")       // delete WARN: no test
+var syncMapExistsKeyCommand = []byte("EXISTS") // check if exists key
+var syncMapDeleteCommand = []byte("DEL")       // delete
 // list (内部的に([]byte ではなく [][]byte として保存しているので) Store / Load は使えない)
 // 順序が関係ないものに使うと吉
 var syncMapInitListCommand = []byte("INIT_LIST")     // init list
@@ -249,14 +249,14 @@ var syncMapIndexListCommand = []byte("INDEX_LIST")   // get value from list
 var syncMapUpdateListCommand = []byte("UPDATE_LIST") // update value at index
 // 全てのキーをLockする。
 // 現在は特定のキーのロックを見ていないのでそれと併用するとデッドロックするかも。
-var syncMapLockAllCommand = []byte("LOCK")     // start transaction WARN: no lock timeout
+var syncMapLockAllCommand = []byte("LOCK")     // start transaction (NOTE: no lock timeout)
 var syncMapUnlockAllCommand = []byte("UNLOCK") // end transaction
 // 特定のキーをLockする。
 // 現在は全体ロックを見ていないのでそれと併用するとデッドロックするかも。
 // それが解除されていれば、 特定のキーをロックする。
-var syncMapLockKeyCommand = []byte("LOCK_K")     // lock a key     TODO:
-var syncMapUnlockKeyCommand = []byte("UNLOCK_K") // unlock a key   TODO:
-var syncMapLengthCommand = []byte("LEN")         // key count TODO:
+var syncMapLockKeyCommand = []byte("LOCK_K")     // lock a key (NOTE: no lock timeout)
+var syncMapUnlockKeyCommand = []byte("UNLOCK_K") // unlock a key
+var syncMapLengthCommand = []byte("LEN")         // key count
 // LIST_GET_ALL 欲しい？
 
 type SyncMapServerTransaction struct {
@@ -529,7 +529,7 @@ func (this *SyncMapServerTransaction) endTransaction() {
 // 配列を初期化する
 func (this *SyncMapServer) initListImpl(key string, forceDirect, forceConnection bool) {
 	if forceDirect || this.IsOnThisApp() {
-		// WARN: 速度が気になれば *[][]byte にすることを検討する
+		// NOTE: 速度が気になれば *[][]byte にすることを検討する
 		this.StoreDirect(key, make([][]byte, 0))
 	} else {
 		this.send(func() []byte {
@@ -550,7 +550,7 @@ func (this *SyncMapServerTransaction) InitList(key string) {
 // index を返す
 func (this *SyncMapServer) appendListImpl(key string, value interface{}, forceDirect, forceConnection bool) int {
 	if forceDirect || this.IsOnThisApp() {
-		this.LockAll() // TODO: クソ雑ロック(特定のキーだけロックしておきたい)
+		this.LockKey(key)
 		elist, ok := this.SyncMap.Load(key)
 		if !ok {
 			this.StoreDirect(key, make([][]byte, 0))
@@ -563,7 +563,7 @@ func (this *SyncMapServer) appendListImpl(key string, value interface{}, forceDi
 			list = append(list, EncodeToBytes(value))
 		}
 		this.StoreDirect(key, list)
-		this.UnlockAll()
+		this.UnlockKey(key)
 		return len(list) - 1
 	} else {
 		encoded2 := this.send(func() []byte {
