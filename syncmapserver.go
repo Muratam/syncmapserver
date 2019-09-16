@@ -5,9 +5,11 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +18,8 @@ import (
 
 const maxSyncMapServerConnectionNum = 15
 const MasterServerAddress = "192.168.0.1"
+const SyncMapBackUpPath = "./syncmapbackup-"
+const DefaultBackUpTimeSecond = 30 // この秒数毎にバックアップファイルを作成する
 
 func IsMasterServerIP() bool {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
@@ -126,6 +130,7 @@ type SyncMapServer struct {
 	SyncMap              sync.Map // string -> (byte[] | byte[][])
 	KeyCount             MutexInt
 	substanceAddress     string
+	masterPort           int
 	connectNum           MutexInt
 	mutex                sync.Mutex
 	IsLocked             bool
@@ -136,10 +141,73 @@ type SyncMapServer struct {
 func DefaultSendCustomFunction(this *SyncMapServer, buf []byte) []byte {
 	return buf // echo server
 }
+func (this *SyncMapServer) GetPath() string {
+	return SyncMapBackUpPath + strconv.Itoa(this.masterPort) + ".sm"
+}
+func (this *SyncMapServer) WriteFile() {
+	if !this.IsOnThisApp() {
+		return
+	}
+	// Lock が必要？
+	result := make([][][]byte, 0)
+	this.SyncMap.Range(func(key, value interface{}) bool {
+		here := make([][]byte, 0)
+		here = append(here, []byte(key.(string)))
+		if bs, ok := value.([]byte); ok {
+			here = append(here, []byte("1"))
+			here = append(here, bs)
+		} else if bss, ok := value.([][]byte); ok {
+			here = append(here, []byte("2"))
+			here = append(here, bss...)
+		} else {
+			panic(nil)
+		}
+		result = append(result, here)
+		return true
+	})
+	file, err := os.Create(this.GetPath())
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+	file.Write(EncodeToBytes(result))
+}
+func (this *SyncMapServer) ReadFile() {
+	if !this.IsOnThisApp() {
+		return
+	}
+	// Lock ?
+	encoded, err := ioutil.ReadFile(this.GetPath())
+	if err != nil {
+		fmt.Println("no " + this.GetPath() + "exists.")
+		return
+	}
+	this.ClearAllDirect()
+	decoded := make([][][]byte, 0)
+	DecodeFromBytes(encoded, &decoded)
+	for _, here := range decoded {
+		key := string(here[0])
+		t := string(here[1])
+		if strings.Compare(t, "1") == 0 {
+			this.StoreDirect(key, here[2])
+		} else if strings.Compare(t, "2") == 0 {
+			this.StoreDirect(key, here[2:])
+		} else {
+			panic(nil)
+		}
+	}
+}
+func (this *SyncMapServer) StartBackUpProcess() {
+	go func() {
+		time.Sleep(time.Duration(DefaultBackUpTimeSecond) * time.Second)
+		this.WriteFile()
+	}()
+}
 
 func newMasterSyncMapServer(port int) *SyncMapServer {
 	this := &SyncMapServer{}
 	this.substanceAddress = ""
+	this.masterPort = port
 	go func() {
 		listen, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(port))
 		defer listen.Close()
@@ -162,11 +230,20 @@ func newMasterSyncMapServer(port int) *SyncMapServer {
 	time.Sleep(10 * time.Millisecond)
 	// 何も設定しなければecho
 	this.MySendCustomFunction = func(this *SyncMapServer, buf []byte) []byte { return buf }
+	// バックアップファイルが見つかればそれを読み込む
+	this.ReadFile()
+	// バックアッププロセスを開始する
+	this.StartBackUpProcess()
 	return this
 }
 func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	this := &SyncMapServer{}
 	this.substanceAddress = substanceAddress
+	port, err := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
+	if err != nil {
+		panic(err)
+	}
+	this.masterPort = port
 	this.MySendCustomFunction = func(this *SyncMapServer, buf []byte) []byte { return buf }
 	return this
 }

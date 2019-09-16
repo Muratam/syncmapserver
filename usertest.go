@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"time"
 	// "time"
 )
 
@@ -51,6 +52,15 @@ func GetPlainPasswordByAccountName(name string) string {
 func main() {
 	for i := 0; i < 10; i++ {
 		InitUsersSM()
+		fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
+		fmt.Println(smUserSlaveServer.GetLen())
+		fmt.Println(accountNameToIDSlaveServer.GetLen())
+	}
+	for i := 0; i < 50; i++ {
+		time.Sleep(time.Duration(1) * time.Second)
+		fmt.Println(i)
+	}
+	for i := 0; i < 10; i++ {
 		fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
 		fmt.Println(smUserSlaveServer.GetLen())
 		fmt.Println(accountNameToIDSlaveServer.GetLen())
