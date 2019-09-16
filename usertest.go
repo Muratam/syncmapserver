@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"strconv"
-	"time"
 	// "time"
 )
 
@@ -70,11 +69,30 @@ func main() {
 	fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
 	fmt.Println(smUserSlaveServer.GetLen())
 	fmt.Println(accountNameToIDSlaveServer.GetLen())
-	transactionTest()
-	for i := 0; i < 50; i++ {
-		time.Sleep(time.Duration(1) * time.Second)
-		fmt.Println(i)
+	keys := make([]string, 0)
+	for i := 100; i < 200; i++ {
+		uid := strconv.Itoa(i)
+		var u User
+		smUserSlaveServer.Load(uid, &u)
+		fmt.Println(u)
+		keys = append(keys, uid)
 	}
+	fmt.Println(keys)
+	values := smUserSlaveServer.MultiLoad(keys)
+	for i, _ := range keys {
+		var u User
+		value := values[i]
+		if len(value) == 0 {
+			continue
+		}
+		DecodeFromBytes(value, &u)
+		fmt.Println(u)
+	}
+	// transactionTest()
+	// for i := 0; i < 50; i++ {
+	// 	time.Sleep(time.Duration(1) * time.Second)
+	// 	fmt.Println(i)
+	// }
 	// for i := 0; i < 10; i++ {
 	// 	fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
 	// 	fmt.Println(smUserSlaveServer.GetLen())
