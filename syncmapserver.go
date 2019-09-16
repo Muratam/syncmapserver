@@ -230,7 +230,7 @@ var syncMapAppendListCommand = []byte("APPEND_LIST") // append value to list(空
 var syncMapLenListCommand = []byte("LEN_LIST")       // len of list
 var syncMapIndexListCommand = []byte("INDEX_LIST")   // get value from list
 var syncMapUpdateListCommand = []byte("UPDATE_LIST") // update value at index
-// WARN: no LIST_GET_ALL
+// LIST_GET_ALL 作る?
 // var syncMapLengthCommand = []byte("LEN")         // key count TODO:
 // var syncMapLockKeyCommand = []byte("LOCK_K")     // lock a key     TODO:
 // var syncMapUnlockKeyCommand = []byte("UNLOCK_K") // unlock a key   TODO:
