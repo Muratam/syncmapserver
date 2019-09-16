@@ -20,11 +20,15 @@ type User struct {
 // とりあえず plain password だけを管理するサーバー(ID/AccountName/PlainPassword以外の情報は嘘)
 var smUserServer = NewMasterOrSlaveSyncMapServer("127.0.0.1:8888", true, DefaultSendCustomFunction)
 var accountNameToIDServer = NewMasterOrSlaveSyncMapServer("127.0.0.1:8889", true, DefaultSendCustomFunction)
+var smUserSlaveServer = NewMasterOrSlaveSyncMapServer("127.0.0.1:8888", false, DefaultSendCustomFunction)
+var accountNameToIDSlaveServer = NewMasterOrSlaveSyncMapServer("127.0.0.1:8889", false, DefaultSendCustomFunction)
 
 func InitUsersSM() {
 	if !smUserServer.IsOnThisApp() {
 		return
 	}
+	smUserServer.ClearAll()
+	accountNameToIDServer.ClearAll()
 	for _, u := range users {
 		id := strconv.Itoa(int(u.ID))
 		name := u.AccountName
@@ -34,19 +38,21 @@ func InitUsersSM() {
 }
 func RegisterUserSM(u User) {
 	id := strconv.Itoa(int(u.ID))
-	smUserServer.Store(id, u)
-	accountNameToIDServer.Store(u.AccountName, id)
+	smUserSlaveServer.Store(id, u)
+	accountNameToIDSlaveServer.Store(u.AccountName, id)
 }
 func GetPlainPasswordByAccountName(name string) string {
 	var u User
 	id := ""
-	accountNameToIDServer.Load(name, &id)
-	smUserServer.Load(id, &u)
+	accountNameToIDSlaveServer.Load(name, &id)
+	smUserSlaveServer.Load(id, &u)
 	return u.PlainPassword
 }
 func main() {
-	InitUsersSM()
-	fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
-	fmt.Println(smUserServer.GetLen())
-	fmt.Println(accountNameToIDServer.GetLen())
+	for i := 0; i < 10; i++ {
+		InitUsersSM()
+		fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
+		fmt.Println(smUserSlaveServer.GetLen())
+		fmt.Println(accountNameToIDSlaveServer.GetLen())
+	}
 }

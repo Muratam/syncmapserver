@@ -276,6 +276,8 @@ var syncMapUnlockAllCommand = []byte("UNLOCK") // end transaction
 var syncMapLockKeyCommand = []byte("LOCK_K")     // lock a key (NOTE: no lock timeout)
 var syncMapUnlockKeyCommand = []byte("UNLOCK_K") // unlock a key
 var syncMapLengthCommand = []byte("LEN")         // key count
+var syncMapClearAllCommand = []byte("CLEAR_ALL")
+
 // LIST_GET_ALL 欲しい？
 
 type SyncMapServerTransaction struct {
@@ -386,6 +388,36 @@ func (this *SyncMapServer) Delete(key string) {
 }
 func (this *SyncMapServerTransaction) Delete(key string) {
 	this.server.deleteImpl(key, false, true)
+}
+
+func (this *SyncMapServer) ClearAllDirect() {
+	var syncMap sync.Map
+	this.SyncMap = syncMap
+	var mutexMap sync.Map
+	this.mutexMap = mutexMap
+	var keyCount MutexInt
+	this.KeyCount = keyCount
+	// WARN: connectNum
+	var mutex sync.Mutex
+	this.mutex = mutex
+	this.IsLocked = false
+}
+func (this *SyncMapServer) clearAllImpl(forceDirect, forceConnection bool) {
+	if forceDirect || this.IsOnThisApp() {
+		this.ClearAllDirect()
+	} else {
+		this.send(func() []byte {
+			return join([][]byte{
+				syncMapClearAllCommand,
+			})
+		}, forceConnection)
+	}
+}
+func (this *SyncMapServer) ClearAll() {
+	this.clearAllImpl(false, false)
+}
+func (this *SyncMapServerTransaction) ClearAll() {
+	this.server.clearAllImpl(false, true)
 }
 
 // Masterなら直に、SlaveならTCPでつないで実行
@@ -760,6 +792,9 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		return []byte("")
 	} else if bytes.Compare(command, syncMapCustomCommand) == 0 {
 		return this.sendCustomImpl(func() []byte { return ss[1] }, true, false)
+	} else if bytes.Compare(command, syncMapClearAllCommand) == 0 {
+		this.clearAllImpl(true, false)
+		return []byte("")
 	} else {
 		panic(nil)
 	}
