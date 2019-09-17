@@ -2,6 +2,7 @@ package main
 
 // もしものときに Redis を使いたくなった場合にでも速やかに移行できる Redisラッパー
 // どうせシリアライズする必要があるので、 int 値以外は全て[]byteにしている。
+//  (int値は IncrByの都合上そのまま置く必要があるので[]byteにしていない)
 import (
 	"strconv"
 
@@ -93,7 +94,27 @@ func (this RedisWrapper) DBSize() int {
 	return int(this.Redis.DBSize().Val())
 }
 
-// Val()
+// List 系は全て Encode して保存(intも)
+func (this RedisWrapper) RPush(key string, value interface{}) int {
+	size := this.Redis.RPush(key, encodeToBytes(value)).Val()
+	return int(size) - 1
+}
+func (this RedisWrapper) LLen(key string) int {
+	size := this.Redis.LLen(key).Val()
+	return int(size) - 1
+}
+func (this RedisWrapper) LIndex(key string, index int, value interface{}) bool {
+	loads, err := this.Redis.LIndex(key, int64(index)).Result()
+	if err != nil {
+		return false
+	}
+	decodeFromBytes([]byte(loads), value)
+	return true
+}
+func (this RedisWrapper) LSet(key string, index int, value interface{}) {
+	this.Redis.LSet(key, int64(index), encodeToBytes(value))
+}
+
 func (this RedisWrapper) FlushAll() {
 	this.Redis.FlushAll()
 }

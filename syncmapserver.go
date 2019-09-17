@@ -74,11 +74,10 @@ var syncMapCommandIncrBy = "INCRBY" // incrBy value
 var syncMapCommandDBSize = "DBSIZE" // stored key count
 // list (内部的に([]byte ではなく [][]byte として保存しているので) Set / Get は使えない)
 // 順序が関係ないものに使うと吉
-var syncMapCommandInitList = "INIT_LIST" // init list
-var syncMapCommandRPush = "RPUSH"        // append value to list(最初が空でも可能)
-var syncMapCommandLLen = "LLEN"          // len of list
-var syncMapCommandLIndex = "LINDEX"      // get value from list
-var syncMapCommandLSet = "LSET"          // update value at index
+var syncMapCommandRPush = "RPUSH"   // append value to list(最初が空でも可能)
+var syncMapCommandLLen = "LLEN"     // len of list
+var syncMapCommandLIndex = "LINDEX" // get value from list
+var syncMapCommandLSet = "LSET"     // update value at index
 
 // 全てのキーをLockする。
 // NOTE: 現在は特定のキーのロックを見ていないのでLockAll()とLockKey()を併用するとデッドロックするかも。
@@ -247,8 +246,6 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 	case syncMapCommandDBSize:
 		return encodeToBytes(this.dbSizeImpl(true, false))
 	// List Command
-	case syncMapCommandInitList:
-		this.initListImpl(string(ss[1]), true, false)
 	case syncMapCommandRPush:
 		return encodeToBytes(this.rpushImpl(string(ss[1]), ss[2], true, false))
 	case syncMapCommandLLen:
@@ -694,35 +691,14 @@ func (this *SyncMapServerTransaction) endTransaction() {
 	}
 }
 
-// 配列を初期化する
-func (this *SyncMapServer) initListImpl(key string, forceDirect, forceConnection bool) {
-	if forceDirect || this.IsMasterServer() {
-		// NOTE: 速度が気になれば *[][]byte にすることを検討する
-		this.storeDirect(key, make([][]byte, 0))
-	} else {
-		this.send(func() []byte {
-			return join([][]byte{
-				[]byte(syncMapCommandInitList),
-				[]byte(key),
-			})
-		}, forceConnection)
-	}
-}
-func (this *SyncMapServer) InitList(key string) {
-	this.initListImpl(key, false, false)
-}
-func (this *SyncMapServerTransaction) InitList(key string) {
-	this.server.initListImpl(key, false, true)
-}
-
 // List に要素を追加したのち index を返す
 func (this *SyncMapServer) rpushImpl(key string, value interface{}, forceDirect, forceConnection bool) int {
 	if forceDirect || this.IsMasterServer() {
 		this.LockKey(key)
 		elist, ok := this.loadDirect(key)
-		if !ok {
-			this.storeDirect(key, make([][]byte, 0))
-			elist, _ = this.loadDirect(key)
+		if !ok { // そもそも存在しなかった時は追加
+			this.storeDirect(key, [][]byte{encodeToBytes(value)})
+			return 0
 		}
 		list := elist.([][]byte)
 		if forceDirect {
@@ -828,6 +804,7 @@ func (this *SyncMapServer) lsetImpl(key string, index int, value interface{}, fo
 		} else {
 			list[index] = encodeToBytes(value)
 		}
+		this.storeDirect(key, list)
 	} else {
 		this.send(func() []byte {
 			return join([][]byte{

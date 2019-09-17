@@ -22,11 +22,11 @@ type KeyValueStoreCore interface { // ptr は参照を着けてLoadすること�
 	DBSize() int // means key count
 	// Keys() []string TODO:
 	FlushAll()
-	// InitList(key string)                     // SyncMapServerの方だけ必要
-	// RPush(key string, value interface{}) int // Push後の 自身の index を返す
-	// LLen(key string) int
-	// LIndex(key string, index int, value interface{}) bool // ptr (キーが無ければ false)
-	// LSet(key string, index int, value interface{})
+	// List 関連
+	RPush(key string, value interface{}) int // Push後の 自身の index を返す
+	LLen(key string) int
+	LIndex(key string, index int, value interface{}) bool // ptr (キーが無ければ false)
+	LSet(key string, index int, value interface{})
 	// LRange(key string, start, stop int, values []interface{}) // ptr(0,-1 で全て取得可能) TODO:
 }
 
@@ -219,8 +219,11 @@ func TestMGetMSetInt(store KeyValueStore) {
 }
 
 // check -------------
-// Speed
+// Speed(redisとの比較 set / mset...)
 // Set - MGet - Master - Slave
+// List Push の速度 (use ptr ?)
+// Lock を解除したい(RPush / LSet)
+// Transactionをチェックしたい
 
 func Test3(f func(store KeyValueStore), times int) {
 	rand.Seed(time.Now().UnixNano())
