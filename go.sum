@@ -1,3 +1,5 @@
+github.com/boltdb/bolt v1.3.1 h1:JQmyP4ZBrce+ZQu0dY660FMfatumYDLun9hBCUVIkF4=
+github.com/boltdb/bolt v1.3.1/go.mod h1:clJnj/oiGkjum5o1McbSZDSLxVThjynRyGBgiAx27Ps=
 github.com/eternnoir/gncp v0.0.0-20170707042257-c70df2d0cd68 h1:DHBMBKJK69xBWnD/jNkTN0sOT7nT7I5If9VMsk9Jj5Y=
 github.com/eternnoir/gncp v0.0.0-20170707042257-c70df2d0cd68/go.mod h1:8FuQ7lU9ZvIJGvc04F/qblkjqIfBahAoEFV+XPxByGw=
 github.com/go-redis/redis v6.15.5+incompatible h1:pLky8I0rgiblWfa8C1EV7fPEUv0aH6vKRaYHc/YRHVk=

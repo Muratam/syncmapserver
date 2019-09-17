@@ -3,10 +3,6 @@ package main
 // もしものときに Redis を使いたくなった場合にでも速やかに移行できる Redisラッパー
 // どうせシリアライズする必要があるので、 int 値以外は全て[]byteにしている。
 import (
-	"bytes"
-	"encoding/gob"
-	"log"
-
 	"github.com/go-redis/redis"
 )
 
@@ -24,25 +20,6 @@ func NewRedisWrapper(address string) RedisWrapper {
 		DB:       0,  // use default DB
 	})
 	return result
-}
-func encodeToBytes(x interface{}) []byte {
-	var buf bytes.Buffer
-	err := gob.NewEncoder(&buf).Encode(x)
-	if err != nil {
-		panic(err)
-	}
-	return buf.Bytes()
-}
-
-// 変更できるようにpointer型で受け取ること
-func decodeFromBytes(bytes_ []byte, x interface{}) {
-	var buf bytes.Buffer
-	buf.Write(bytes_)
-	dec := gob.NewDecoder(&buf)
-	err := dec.Decode(x)
-	if err != nil {
-		log.Panic(err)
-	}
 }
 
 func (this RedisWrapper) Get(key string, value interface{}) bool {
@@ -65,6 +42,28 @@ func (this RedisWrapper) Set(key string, value interface{}) {
 	}
 	bs := encodeToBytes(value)
 	this.Redis.Set(key, bs, 0)
+}
+
+func (this RedisWrapper) MGet(keys []string) MGetResult {
+	// TODO: int64
+	loads := this.Redis.MGet(keys...).Val()
+	result := newMGetResult()
+	for i, load := range loads {
+		if load != nil {
+			// WARN: string ??
+			result.resultMap[keys[i]] = []byte(load.(string))
+		}
+	}
+	return result
+}
+func (this RedisWrapper) MSet(store map[string]interface{}) {
+	// TODO: int64
+	var pairs []interface{}
+	for k, v := range store {
+		bs := encodeToBytes(v)
+		pairs = append(pairs, k, bs)
+	}
+	this.Redis.MSet(pairs...)
 }
 
 func (this RedisWrapper) IncrBy(key string, value int) int {
