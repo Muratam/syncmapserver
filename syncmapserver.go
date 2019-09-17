@@ -100,6 +100,22 @@ var syncMapCommandCustom = "CUSTOM" // custom
 // bytes utils //////////////////////////////////////////
 // 20000Byteを超える際の Linux上での調子が悪いので、
 // 先にContent-Lengthを32bit(4Byte)指定して読み込ませている
+func parse32bit(input []byte) int {
+	result := 0
+	result += int(input[0])
+	result += int(input[1]) << 8
+	result += int(input[2]) << 16
+	result += int(input[3]) << 24
+	return result
+}
+func format32bit(input int) []byte {
+	return []byte{
+		byte(input & 0x000000ff),
+		byte((input & 0x0000ff00) >> 8),
+		byte((input & 0x00ff0000) >> 16),
+		byte((input & 0xff000000) >> 24),
+	}
+}
 func readAll(conn net.Conn) []byte {
 	contentLen := 0
 	if true {
@@ -114,10 +130,7 @@ func readAll(conn net.Conn) []byte {
 				log.Panic("too short buf : ", readBufNum)
 			}
 		}
-		contentLen += int(buf[0])
-		contentLen += int(buf[1]) << 8
-		contentLen += int(buf[2]) << 16
-		contentLen += int(buf[3]) << 24
+		contentLen += parse32bit(buf)
 		if contentLen == 0 {
 			return []byte("")
 		}
@@ -157,12 +170,7 @@ func writeAll(conn net.Conn, content []byte) {
 	if contentLen >= 4294967296 {
 		log.Panic("Too Long Content", contentLen)
 	}
-	conn.Write([]byte{
-		byte((contentLen & 0x000000ff) >> 0),
-		byte((contentLen & 0x0000ff00) >> 8),
-		byte((contentLen & 0x00ff0000) >> 16),
-		byte((contentLen & 0xff000000) >> 24),
-	})
+	conn.Write(format32bit(contentLen))
 	conn.Write(content)
 }
 
@@ -193,6 +201,20 @@ func decodeFromBytes(bytes_ []byte, x interface{}) {
 
 func join(input [][]byte) []byte {
 	return encodeToBytes(input)
+	// // 要素数 4B (32bit)
+	// // 各長さ 4B x 要素数 (32bit)
+	// // データ中身 各長さ x 要素数
+	// size := 0
+	// for _, bs := range input {
+	// 	size += len(bs)
+	// }
+	// result := make([]byte, size)
+	// now := 0
+	// for _, bs := range input {
+	// 	copy(result[now:now+len(bs)], bs[:])
+	// 	now += len(bs)
+	// }
+	// return result
 }
 func split(input []byte) [][]byte {
 	var result [][]byte
