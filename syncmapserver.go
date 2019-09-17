@@ -16,11 +16,12 @@ import (
 	"time"
 )
 
+// NOTE: 環境変数 REDIS_HOST に 12.34.56.78 などのIPアドレスを入れる
+
 const maxSyncMapServerConnectionNum = 15
-const MasterServerAddress = "192.16"
+const MasterServerAddressWhenNO_REDIS_HOST = "12.34.56.78"
 const SyncMapBackUpPath = "./syncmapbackup-"
 const DefaultBackUpTimeSecond = 30 // この秒数毎にバックアップファイルを作成する
-
 func IsMasterServerIP() bool {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
@@ -28,14 +29,21 @@ func IsMasterServerIP() bool {
 	}
 	defer conn.Close()
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return strings.Compare(localAddr.IP.String(), MasterServerAddress) == 0
+	return strings.Compare(localAddr.IP.String(), parseRedisHostIP()) == 0
 }
 func GetMasterServerAddress() string {
 	if IsMasterServerIP() {
 		return "127.0.0.1"
 	} else {
-		return MasterServerAddress
+		return parseRedisHostIP()
 	}
+}
+func parseRedisHostIP() string {
+	result := os.Getenv("REDIS_HOST")
+	if result == "" {
+		return MasterServerAddressWhenNO_REDIS_HOST
+	}
+	return result
 }
 
 // MutexInt
