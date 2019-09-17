@@ -131,7 +131,7 @@ func TestKeyCount(store KeyValueStore) {
 	assert(store.Exists(key2))
 	assert(store.DBSize() == 2)
 }
-func TestMGetMSet(store KeyValueStore) {
+func TestMGetMSetString(store KeyValueStore) {
 	var keys []string
 	localMap := map[string]interface{}{}
 	for i := 0; i < 1000; i++ {
@@ -141,22 +141,86 @@ func TestMGetMSet(store KeyValueStore) {
 		keys = append(keys, key)
 	}
 	store.MSet(localMap)
-	v123 := ""
-	store.Get("k123", &v123)
-	assert(v123 == "v246")
+	v8 := ""
+	store.Get("k8", &v8)
+	assert(v8 == "v16")
+	keys = append(keys, "NOP")
 	mgetResult := store.MGet(keys)
+	vNop := ""
+	ok := mgetResult.Get("NOP", &vNop)
+	assert(!ok)
+	assert(vNop == "")
 	for key, preValue := range localMap {
 		var proValue string
+		ok = mgetResult.Get(key, &proValue)
+		assert(proValue == preValue)
+		assert(ok)
+	}
+}
+
+func TestMGetMSetUser(store KeyValueStore) {
+	type User struct {
+		ID           int64     `json:"id" db:"id"`
+		AccountName  string    `json:"account_name" db:"account_name"`
+		Address      string    `json:"address,omitempty" db:"address"`
+		NumSellItems int       `json:"num_sell_items" db:"num_sell_items"`
+		LastBump     time.Time `json:"-" db:"last_bump"`
+		CreatedAt    time.Time `json:"-" db:"created_at"`
+	}
+	var keys []string
+	localMap := map[string]interface{}{}
+	for i := 0; i < 1000; i++ {
+		key := "k" + strconv.Itoa(i)
+		u := User{
+			ID:           int64(random()),
+			AccountName:  randStr(),
+			Address:      randStr(),
+			NumSellItems: random(),
+			LastBump:     time.Now().Truncate(time.Second),
+			CreatedAt:    time.Now().Truncate(time.Second),
+		}
+		localMap[key] = u
+		keys = append(keys, key)
+	}
+	store.MSet(localMap)
+	var v8 User
+	store.Get("k8", &v8)
+	assert(v8 == localMap["k8"])
+	mgetResult := store.MGet(keys)
+	for key, preValue := range localMap {
+		var proValue User
 		mgetResult.Get(key, &proValue)
 		assert(proValue == preValue)
 	}
-	// check -------------
-	// nil key
-	// int
-	// Set - MGet
-	// Speed
-	// Set - MGet - Master - Slave
 }
+func TestMGetMSetInt(store KeyValueStore) {
+	var keys []string
+	localMap := map[string]interface{}{}
+	for i := 0; i < 1000; i++ {
+		key := "k" + strconv.Itoa(i)
+		localMap[key] = i
+		keys = append(keys, key)
+	}
+	store.MSet(localMap)
+	v8 := 0
+	store.Get("k8", &v8)
+	assert(v8 == localMap["k8"])
+	store.IncrBy("k8", 1)
+	v8 = 0
+	store.Get("k8", &v8)
+	assert(v8-1 == localMap["k8"])
+	store.IncrBy("k8", -1)
+	mgetResult := store.MGet(keys)
+	for key, preValue := range localMap {
+		proValue := 0
+		mgetResult.Get(key, &proValue)
+		assert(proValue == preValue)
+	}
+}
+
+// check -------------
+// Speed
+// Set - MGet - Master - Slave
 
 func Test3(f func(store KeyValueStore), times int) {
 	rand.Seed(time.Now().UnixNano())
@@ -181,10 +245,12 @@ var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
 var names = []string{"smMaster", "smSlave ", "redis   "}
 
 func main() {
-	t := 1
+	t := 10
 	Test3(TestGetSetInt, t)
 	Test3(TestGetSetUser, t)
 	Test3(TestIncrBy, t)
 	Test3(TestKeyCount, t)
-	Test3(TestMGetMSet, 1)
+	Test3(TestMGetMSetString, 1)
+	Test3(TestMGetMSetUser, 1)
+	Test3(TestMGetMSetInt, 1)
 }

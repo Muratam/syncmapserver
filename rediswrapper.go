@@ -3,6 +3,8 @@ package main
 // もしものときに Redis を使いたくなった場合にでも速やかに移行できる Redisラッパー
 // どうせシリアライズする必要があるので、 int 値以外は全て[]byteにしている。
 import (
+	"strconv"
+
 	"github.com/go-redis/redis"
 )
 
@@ -49,19 +51,30 @@ func (this RedisWrapper) MGet(keys []string) MGetResult {
 	loads := this.Redis.MGet(keys...).Val()
 	result := newMGetResult()
 	for i, load := range loads {
-		if load != nil {
-			// WARN: string ??
-			result.resultMap[keys[i]] = []byte(load.(string))
+		// intならDecodingしておく
+		if load == nil { // キーが存在しない
+			continue
 		}
+		// WARN: 偶然にもEncodedな結果が数値だったときにintチェックが通ってしまうが、仕方がない...
+		// IncrBy が無ければここは消してしまってもよい。
+		loadedStr := load.(string)
+		if valueInt, err := strconv.Atoi(loadedStr); err == nil {
+			result.resultMap[keys[i]] = encodeToBytes(valueInt)
+			continue
+		}
+		result.resultMap[keys[i]] = []byte(loadedStr)
 	}
 	return result
 }
 func (this RedisWrapper) MSet(store map[string]interface{}) {
-	// TODO: int64
 	var pairs []interface{}
-	for k, v := range store {
-		bs := encodeToBytes(v)
-		pairs = append(pairs, k, bs)
+	for key, value := range store {
+		if valueInt, ok := value.(int); ok {
+			pairs = append(pairs, key, valueInt)
+			continue
+		}
+		bs := encodeToBytes(value)
+		pairs = append(pairs, key, bs)
 	}
 	this.Redis.MSet(pairs...)
 }
