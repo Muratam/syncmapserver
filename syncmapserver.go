@@ -71,6 +71,7 @@ var syncMapCommandMSet = "MSET"     // multi set
 var syncMapCommandExists = "EXISTS" // check if exists key
 var syncMapCommandDel = "DEL"       // delete
 var syncMapCommandIncrBy = "INCRBY" // incrBy value
+var syncMapCommandDBSize = "DBSIZE" // stored key count
 // list (内部的に([]byte ではなく [][]byte として保存しているので) Set / Get は使えない)
 // 順序が関係ないものに使うと吉
 var syncMapCommandInitList = "INIT_LIST" // init list
@@ -92,7 +93,6 @@ var syncMapCommandUnlockKey = "UNLOCK_K" // unlock a key
 var syncMapCommandIsLockedKey = "ISLOCKED_K"
 
 // そのほか
-var syncMapCommandKeysCount = "KEYS_COUNT" // key count
 var syncMapCommandFlushAll = "FLUSHALL"
 var syncMapCommandCustom = "CUSTOM" // custom
 
@@ -244,8 +244,8 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		return EncodeToBytes(this.incrByImpl(string(ss[1]), value, true))
 	case syncMapCommandDel:
 		this.delImpl(string(ss[1]), true, false)
-	case syncMapCommandKeysCount:
-		return EncodeToBytes(this.keysCountImpl(true, false))
+	case syncMapCommandDBSize:
+		return EncodeToBytes(this.dbSizeImpl(true, false))
 	// List Command
 	case syncMapCommandInitList:
 		this.initListImpl(string(ss[1]), true, false)
@@ -485,13 +485,13 @@ func (this *SyncMapServerTransaction) Exists(key string) bool {
 }
 
 // SyncMapに保存されている要素数を取得
-func (this *SyncMapServer) keysCountImpl(forceDirect, forceConnection bool) int {
+func (this *SyncMapServer) dbSizeImpl(forceDirect, forceConnection bool) int {
 	if forceDirect || this.IsMasterServer() {
 		return this.KeyCount.Get()
 	} else {
 		encoded := this.send(func() []byte {
 			return join([][]byte{
-				[]byte(syncMapCommandKeysCount),
+				[]byte(syncMapCommandDBSize),
 			})
 		}, forceConnection)
 		result := 0
@@ -499,11 +499,11 @@ func (this *SyncMapServer) keysCountImpl(forceDirect, forceConnection bool) int 
 		return result
 	}
 }
-func (this *SyncMapServer) KeysCount() int {
-	return this.keysCountImpl(false, false)
+func (this *SyncMapServer) DBSize() int {
+	return this.dbSizeImpl(false, false)
 }
-func (this *SyncMapServerTransaction) KeysCount() int {
-	return this.server.keysCountImpl(false, true)
+func (this *SyncMapServerTransaction) DBSize() int {
+	return this.server.dbSizeImpl(false, true)
 }
 
 // += value する

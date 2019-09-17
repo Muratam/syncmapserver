@@ -1,7 +1,7 @@
 package main
 
 // もしものときに Redis を使いたくなった場合にでも速やかに移行できる Redisラッパー
-
+// どうせシリアライズする必要があるので、 int 値以外は全て[]byteにしている。
 import (
 	"bytes"
 	"encoding/gob"
@@ -69,6 +69,16 @@ func (this RedisWrapper) Set(key string, value interface{}) {
 
 func (this RedisWrapper) IncrBy(key string, value int) int {
 	return int(this.Redis.IncrBy(key, int64(value)).Val())
+}
+
+func (this RedisWrapper) Exists(key string) bool {
+	return this.Redis.Exists(key).Val() == 1
+}
+func (this RedisWrapper) Del(key string) {
+	this.Redis.Del(key)
+}
+func (this RedisWrapper) DBSize() int {
+	return int(this.Redis.DBSize().Val())
 }
 
 // Val()

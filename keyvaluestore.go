@@ -16,10 +16,10 @@ type KeyValueStoreCore interface { // ptr は参照を着けてLoadすること�
 	Set(key string, value interface{})
 	// MSet(keys []string, values []interface{}) // ptr
 	// MGet(keys []string, values []interface{})
-	// Exists(key string) bool
-	// Del(key string)
+	Exists(key string) bool
+	Del(key string)
 	IncrBy(key string, value int) int
-	// KeysCount() int
+	DBSize() int // means key count
 	// Keys() []string TODO:
 	FlushAll()
 	// InitList(key string)                     // SyncMapServerの方は必要
@@ -107,6 +107,28 @@ func TestIncrBy(store KeyValueStore) {
 	assert(added1 == added2)
 	assert(added1 == pre+add)
 }
+func TestKeyCount(store KeyValueStore) {
+	store.FlushAll()
+	assert(store.DBSize() == 0)
+	key1 := "key1"
+	key2 := "key2"
+	key3 := "key3"
+	store.Set(key1, "aa")
+	store.Set(key2, "bb")
+	assert(store.Exists(key1))
+	assert(store.Exists(key2))
+	assert(!store.Exists(key3))
+	assert(store.DBSize() == 2)
+	store.Del(key3)
+	assert(!store.Exists(key3))
+	assert(store.DBSize() == 2)
+	store.Del(key2)
+	assert(!store.Exists(key2))
+	assert(store.DBSize() == 1)
+	store.Set(key2, "bb")
+	assert(store.Exists(key2))
+	assert(store.DBSize() == 2)
+}
 
 func Test3(f func(store KeyValueStore), times int) {
 	rand.Seed(time.Now().UnixNano())
@@ -117,7 +139,9 @@ func Test3(f func(store KeyValueStore), times int) {
 		for j := 0; j < times; j++ {
 			f(store)
 		}
-		fmt.Println(names[i], ":", time.Now().Sub(start))
+
+		duration := time.Now().Sub(start)
+		fmt.Println(names[i], ":", int64(duration/time.Millisecond), "ms")
 	}
 }
 
@@ -126,10 +150,12 @@ var smMaster KeyValueStore = NewSyncMapServer("127.0.0.1:8080", true)
 var smSlave KeyValueStore = NewSyncMapServer("127.0.0.1:8080", false)
 var redisWrap KeyValueStore = NewRedisWrapper("127.0.0.1:6379")
 var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
-var names = []string{"smMaster", "smSlave", "redis"}
+var names = []string{"smMaster", "smSlave ", "redis   "}
 
 func main() {
-	Test3(TestGetSetInt, 100)
-	Test3(TestGetSetUser, 100)
-	Test3(TestIncrBy, 100)
+	t := 10
+	Test3(TestGetSetInt, t)
+	Test3(TestGetSetUser, t)
+	Test3(TestIncrBy, t)
+	Test3(TestKeyCount, t)
 }
