@@ -1,5 +1,7 @@
 package main
 
+// https://github.com/Muratam/go-syncmapserver
+
 import (
 	"bytes"
 	"encoding/gob"
@@ -17,9 +19,8 @@ import (
 )
 
 // NOTE: 環境変数 REDIS_HOST に 12.34.56.78 などのIPアドレスを入れる
-
+const MasterServerAddressWhenNO_REDIS_HOST = "12.34.56.78" // ↑が入ってないとこれが使われる
 const maxSyncMapServerConnectionNum = 15
-const MasterServerAddressWhenNO_REDIS_HOST = "12.34.56.78"
 const SyncMapBackUpPath = "./syncmapbackup-"
 const DefaultBackUpTimeSecond = 30 // この秒数毎にバックアップファイルを作成する
 func IsMasterServerIP() bool {
