@@ -1,7 +1,5 @@
 package main
 
-// https://github.com/Muratam/go-syncmapserver
-
 import (
 	"bytes"
 	"encoding/gob"
@@ -19,8 +17,9 @@ import (
 )
 
 // NOTE: 環境変数 REDIS_HOST に 12.34.56.78 などのIPアドレスを入れる
-const MasterServerAddressWhenNO_REDIS_HOST = "12.34.56.78" // ↑が入ってないとこれが使われる
+
 const maxSyncMapServerConnectionNum = 15
+const MasterServerAddressWhenNO_REDIS_HOST = "12.34.56.78"
 const SyncMapBackUpPath = "./syncmapbackup-"
 const DefaultBackUpTimeSecond = 30 // この秒数毎にバックアップファイルを作成する
 func IsMasterServerIP() bool {
@@ -80,40 +79,72 @@ func (this *MutexInt) Dec() int {
 }
 
 // bytes utils
-func readAll(conn *net.Conn) []byte {
-	readMax := 1024
-	bufAll := make([]byte, readMax)
-	alreadyReadAll := false
-	if true { // 1回目だけ特別にすることで []byte のコピーを削減
-		readBufNum, err := (*conn).Read(bufAll)
-		if err != nil {
-			if err == io.EOF {
-				alreadyReadAll = true
-			} else {
-				panic(err)
+// NOTE: 20000Byteを超える際の Linux上での調子が悪いので、
+// 先にContent-Lengthを32bit(4Byte)指定して読み込ませる
+func readAll(conn net.Conn) []byte {
+	contentLen := 0
+	if true {
+		buf := make([]byte, 4)
+		readBufNum,err := conn.Read(buf)
+		if readBufNum != 4 {
+			if readBufNum == 0 {
+				// WARN
+				return readAll(conn)
+			} else{
+				// WARN
+				log.Panic("too short buf : ",readBufNum)
 			}
 		}
-		if readBufNum < readMax {
-			alreadyReadAll = true
-			bufAll = bufAll[:readBufNum]
+		contentLen += int(buf[0])
+		contentLen += int(buf[1]) << 8
+		contentLen += int(buf[2]) << 16
+		contentLen += int(buf[3]) << 24
+		if contentLen == 0 {
+			return []byte("")
+		}
+		if err != nil{
+			log.Panic(err)
 		}
 	}
-	for !alreadyReadAll { // EOFまで読む
+	readMax := 1024
+	bufAll := make([]byte, 0)
+	currentReadLen := 0
+	for currentReadLen < contentLen {
 		buf := make([]byte, readMax)
-		readBufNum, err := (*conn).Read(buf)
+		readBufNum,err := conn.Read(buf)
 		if err != nil {
 			if err == io.EOF {
-				bufAll = append(bufAll, buf[:readBufNum]...)
-				break
+				if currentReadLen + readBufNum != contentLen {
+					log.Panic("invalid len TCP")
+				}
+				return append(bufAll,buf[:readBufNum]...)
+			} else {
+				log.Panic(err)
 			}
-			panic(err)
 		}
-		bufAll = append(bufAll, buf[:readBufNum]...)
-		if readBufNum < readMax { // 読み込んだ数が少ないのでもうこれ以上読み込む必要がない
-			break
+		if readBufNum == 0 {
+			continue
 		}
+		currentReadLen += readBufNum
+		bufAll = append(bufAll,buf[:readBufNum]...)
+	}
+	if currentReadLen > contentLen{
+		log.Panic("Too Long Load")
 	}
 	return bufAll
+}
+func writeAll(conn net.Conn,content []byte){
+	contentLen := len(content)
+	if contentLen >= 4294967296 {
+		log.Panic("Too Long Content", contentLen)
+	}
+	conn.Write([]byte{
+		byte((contentLen & 0x000000ff) >> 0),
+		byte((contentLen & 0x0000ff00) >> 8),
+		byte((contentLen & 0x00ff0000) >> 16),
+		byte((contentLen & 0xff000000) >> 24),
+	})
+	conn.Write(content)
 }
 
 func EncodeToBytes(x interface{}) []byte {
@@ -235,7 +266,7 @@ func newMasterSyncMapServer(port int) *SyncMapServer {
 				continue
 			}
 			go func() {
-				conn.Write(this.interpretWrapFunction(readAll(&conn)))
+				writeAll(conn,this.interpretWrapFunction(readAll(conn)))
 				conn.Close()
 			}()
 		}
@@ -296,8 +327,8 @@ func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
 		this.connectNum.Dec()
 		return this.sendBySlave(f, force)
 	}
-	conn.Write(f())
-	result := readAll(&conn)
+	writeAll(conn,f())
+	result := readAll(conn)
 	conn.Close()
 	this.connectNum.Dec()
 	return result
