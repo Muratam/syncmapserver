@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"reflect"
+	"runtime"
 	"strconv"
 	"time"
 )
@@ -89,22 +91,23 @@ func TestGetSetUser(store KeyValueStore) {
 	// fmt.Print(u, u2)
 }
 
+func Test3(f func(store KeyValueStore)) {
+	rand.Seed(time.Now().UnixNano())
+	fmt.Println("------- ", runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name(), " -------")
+	for i, store := range stores {
+		store.FlushAll()
+		start := time.Now()
+		f(store)
+		fmt.Println(names[i], ":", time.Now().Sub(start))
+	}
+}
+
 // NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) のように ISUCON本本では使う
 var smMaster KeyValueStore = NewSyncMapServer("127.0.0.1:8080", true)
 var smSlave KeyValueStore = NewSyncMapServer("127.0.0.1:8080", false)
 var redisWrap KeyValueStore = NewRedisWrapper("127.0.0.1:6379")
-
-func Test3(f func(store KeyValueStore)) {
-	rand.Seed(time.Now().UnixNano())
-	stores := []KeyValueStore{smMaster, smSlave, redisWrap}
-	names := []string{"smMaster", "smSlave", "redis"}
-	for i, store := range stores {
-		store.FlushAll()
-		f(store)
-		fmt.Print(names[i], "ok. ")
-	}
-	fmt.Println("")
-}
+var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
+var names = []string{"smMaster", "smSlave", "redis"}
 
 func main() {
 	Test3(TestGetSetInt)
