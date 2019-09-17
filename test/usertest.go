@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/gob"
 	"fmt"
 	"strconv"
 	// "time"
@@ -65,19 +66,35 @@ func transactionTest() {
 	}
 }
 func main() {
+	gob.Register(User{})
+	gob.Register([]User{})
+	gob.Register([]byte{})
+	gob.Register([][]byte{})
 	InitUsersSM()
-	fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
-	fmt.Println(smUserSlaveServer.GetLen())
-	fmt.Println(accountNameToIDSlaveServer.GetLen())
+	// fmt.Println(GetPlainPasswordByAccountName("nishimura_tetsuhiro"))
+	// fmt.Println(smUserSlaveServer.GetLen())
+	// fmt.Println(accountNameToIDSlaveServer.GetLen())
 	keys := make([]string, 0)
-	for i := 100; i < 200; i++ {
-		uid := strconv.Itoa(i)
-		var u User
-		smUserSlaveServer.Load(uid, &u)
-		fmt.Println(u)
-		keys = append(keys, uid)
+	users := make([]User, 0)
+	for x := 0; x < 2; x++ {
+		for i := 1; i < 1000; i++ {
+			uid := strconv.Itoa(i)
+			var u User
+			smUserSlaveServer.Load(uid, &u)
+			// fmt.Println(u)
+			keys = append(keys, uid)
+			users = append(users, u)
+		}
 	}
-	fmt.Println(keys)
+	keys[10] = "889d0sa88"
+	// func() { // MultiStore
+	// 	for i := 0; i < len(users); i++ {
+
+	// 	}
+	// }()
+
+	// MultiLoad
+	fmt.Println("keys", keys)
 	values := smUserSlaveServer.MultiLoad(keys)
 	for i, _ := range keys {
 		var u User
@@ -85,9 +102,11 @@ func main() {
 		if len(value) == 0 {
 			continue
 		}
+		fmt.Println(i, value[:1])
 		DecodeFromBytes(value, &u)
-		fmt.Println(u)
+		fmt.Println(u.ID)
 	}
+
 	// transactionTest()
 	// for i := 0; i < 50; i++ {
 	// 	time.Sleep(time.Duration(1) * time.Second)

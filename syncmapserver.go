@@ -17,7 +17,7 @@ import (
 )
 
 const maxSyncMapServerConnectionNum = 15
-const MasterServerAddress = "192.168.0.1"
+const MasterServerAddress = "192.16"
 const SyncMapBackUpPath = "./syncmapbackup-"
 const DefaultBackUpTimeSecond = 30 // この秒数毎にバックアップファイルを作成する
 
@@ -94,6 +94,7 @@ func readAll(conn *net.Conn) []byte {
 		readBufNum, err := (*conn).Read(buf)
 		if err != nil {
 			if err == io.EOF {
+				bufAll = append(bufAll, buf[:readBufNum]...)
 				break
 			}
 			panic(err)
@@ -121,7 +122,10 @@ func DecodeFromBytes(bytes_ []byte, x interface{}) {
 	dec := gob.NewDecoder(&buf)
 	err := dec.Decode(x)
 	if err != nil {
-		panic(err)
+		log.Println("PARSE ERRR|OR:")
+		log.Println(len(bytes_), ":", bytes_)
+		log.Println(x)
+		log.Panic(err)
 	}
 }
 
@@ -337,6 +341,7 @@ var syncMapCustomCommand = []byte("CT")        // custom
 var syncMapLoadCommand = []byte("GET")         // load
 var syncMapMultiLoadCommand = []byte("MGET")   // multi load
 var syncMapStoreCommand = []byte("SET")        // store
+var syncMapMultiStoreCommand = []byte("MSET")  // multi set
 var syncMapAddCommand = []byte("ADD")          // add value
 var syncMapExistsKeyCommand = []byte("EXISTS") // check if exists key
 var syncMapDeleteCommand = []byte("DEL")       // delete
@@ -435,10 +440,10 @@ func (this *SyncMapServerTransaction) Load(key string, res interface{}) bool {
 
 // NOTE: 変更できるようにpointer型で受け取ること
 // Masterなら直に、SlaveならTCPでつないで実行
-// あとでDecodeすること。空なら 空。
+// あとでDecodeすること。空なら 空(非nil)。
 func (this *SyncMapServer) multiLoadImpl(keys []string, forceDirect, forceConnection bool) [][]byte {
-	result := make([][]byte, 0)
 	if forceDirect || this.IsOnThisApp() {
+		result := make([][]byte, 0)
 		for _, key := range keys {
 			value, ok := this.SyncMap.Load(key)
 			if !ok {
@@ -449,14 +454,14 @@ func (this *SyncMapServer) multiLoadImpl(keys []string, forceDirect, forceConnec
 		}
 		return result
 	} else { // やっていき
-		loadedBytes := this.send(func() []byte {
-			return join([][]byte{
-				syncMapMultiLoadCommand,
-				EncodeToBytes(keys),
-			})
-		}, forceConnection)
-		DecodeFromBytes(loadedBytes, &result)
-		return result
+		return split(
+			this.send(func() []byte {
+				return join([][]byte{
+					syncMapMultiLoadCommand,
+					EncodeToBytes(keys),
+				})
+			}, forceConnection),
+		)
 	}
 }
 func (this *SyncMapServer) MultiLoad(keys []string) [][]byte {
@@ -485,6 +490,32 @@ func (this *SyncMapServer) Store(key string, value interface{}) {
 }
 func (this *SyncMapServerTransaction) Store(key string, value interface{}) {
 	this.server.storeImpl(key, value, true)
+}
+
+// NOTE: EncodeToBytes() した配列を渡すこと。
+// Masterなら直に、SlaveならTCPでつないで実行
+// あとでDecodeすること。空なら 空。
+func (this *SyncMapServer) multiStoreImpl(keys []string, values [][]byte, forceDirect, forceConnection bool) {
+	if forceDirect || this.IsOnThisApp() {
+		for i, key := range keys {
+			value := values[i]
+			this.StoreDirect(key, value)
+		}
+	} else { // やっていき
+		this.send(func() []byte {
+			return join([][]byte{
+				syncMapMultiStoreCommand,
+				EncodeToBytes(keys),
+				EncodeToBytes(values),
+			})
+		}, forceConnection)
+	}
+}
+func (this *SyncMapServer) MultiStore(keys []string, values [][]byte) {
+	this.multiStoreImpl(keys, values, false, false)
+}
+func (this *SyncMapServerTransaction) MultiStore(keys []string, values [][]byte) {
+	this.server.multiStoreImpl(keys, values, false, true)
 }
 
 // Masterなら直に、SlaveならTCPでつないで実行
@@ -957,8 +988,14 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 	} else if bytes.Compare(command, syncMapMultiLoadCommand) == 0 {
 		keys := make([]string, 0)
 		DecodeFromBytes(ss[1], &keys)
-		result := this.multiLoadImpl(keys, true, false)
-		return EncodeToBytes(result)
+		return join(this.multiLoadImpl(keys, true, false))
+	} else if bytes.Compare(command, syncMapMultiStoreCommand) == 0 {
+		keys := make([]string, 0)
+		DecodeFromBytes(ss[1], &keys)
+		values := make([][]byte, 0)
+		DecodeFromBytes(ss[2], &values)
+		this.multiStoreImpl(keys, values, true, false)
+		return []byte("")
 	} else if bytes.Compare(command, syncMapCustomCommand) == 0 {
 		return this.sendCustomImpl(func() []byte { return ss[1] }, true, false)
 	} else if bytes.Compare(command, syncMapClearAllCommand) == 0 {
