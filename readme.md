@@ -30,9 +30,10 @@ Master と Slave に分かれており、Masterを動かしているGoアプリ�
 1. テストをきちんと書いておきたい。GoDocみたいなのが欲しい。
 1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
 1. TODO: 一つのキーに保存された list の 全てを一括取得も実装しておきたい
+1. MultiLoad / MultiSet を DecodeBytesを隠蔽したい
 1. join / split はもっと高速化できそう
 1. 過去にRedisを使っていたものを代替してテストしておきたい
-
+1. アクセス解析できるようになると便利そう
 
 # ISUCONでの使用時のヒント
 - https://github.com/Muratam/isucon9q/blob/nouser/postapi.go

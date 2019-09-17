@@ -1,4 +1,4 @@
-module main
+module syncmapserver
 
 go 1.12
 
