@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
+	"net/http"
+	_ "net/http/pprof"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -55,22 +58,22 @@ func randStr() string {
 }
 func randUser() User {
 	return User{
-		ID:           int64(random()),
-		AccountName:  randStr(),
-		Address:      randStr(),
-		NumSellItems: random(),
-		LastBump:     time.Now().Truncate(time.Second),
-		CreatedAt:    time.Now().Truncate(time.Second),
+		ID:          int64(random()),
+		AccountName: randStr(),
+		Address:     randStr(),
+		// NumSellItems: random(),
+		// LastBump:     time.Now().Truncate(time.Second),
+		// CreatedAt:    time.Now().Truncate(time.Second),
 	}
 }
 
 type User struct {
-	ID           int64     `json:"id" db:"id"`
-	AccountName  string    `json:"account_name" db:"account_name"`
-	Address      string    `json:"address,omitempty" db:"address"`
-	NumSellItems int       `json:"num_sell_items" db:"num_sell_items"`
-	LastBump     time.Time `json:"-" db:"last_bump"`
-	CreatedAt    time.Time `json:"-" db:"created_at"`
+	ID          int64  `json:"id" db:"id"`
+	AccountName string `json:"account_name" db:"account_name"`
+	Address     string `json:"address,omitempty" db:"address"`
+	// NumSellItems int    `json:"num_sell_items" db:"num_sell_items"`
+	// LastBump     time.Time `json:"-" db:"last_bump"`
+	// CreatedAt    time.Time `json:"-" db:"created_at"`
 }
 
 func TestGetSetInt(store KeyValueStore) {
@@ -243,29 +246,51 @@ func TestMasterSlaveInterpret() {
 	fmt.Println("-------  Master Slave Test Passed  -------")
 }
 
-func BenchMGetMSetUser4000(store KeyValueStore) {
-	var keys []string
-	localMap := map[string]interface{}{}
+var localUserMap4000 map[string]interface{}
+var keys4000 []string
+
+func InitForBenchMGetMSetUser4000() {
+	localUserMap4000 = map[string]interface{}{}
 	for i := 0; i < 4000; i++ {
 		key := randStr()
-		localMap[key] = randUser()
-		keys = append(keys, key)
+		localUserMap4000[key] = randUser()
+		keys4000 = append(keys4000, key)
 	}
-	store.MSet(localMap)
-	mgetResult := store.MGet(keys)
-	for key, preValue := range localMap {
+}
+func BenchMGetMSetUser4000(store KeyValueStore) {
+	store.MSet(localUserMap4000)
+	mgetResult := store.MGet(keys4000)
+	for key, preValue := range localUserMap4000 {
 		var proValue User
 		mgetResult.Get(key, &proValue)
 		assert(proValue.ID == preValue.(User).ID)
 	}
 }
+func BenchMGetMSetStr10000(store KeyValueStore) {
+	var keys []string
+	localMap := map[string]interface{}{}
+	for i := 0; i < 10000; i++ {
+		key := randStr()
+		localMap[key] = randStr()
+		keys = append(keys, key)
+	}
+	store.MSet(localMap)
+	mgetResult := store.MGet(keys)
+	for key, preValue := range localMap {
+		var proValue string
+		mgetResult.Get(key, &proValue)
+		assert(proValue[0] == preValue.(string)[0])
+	}
+}
 func BenchGetSetUser(store KeyValueStore) {
-	k := randStr()
-	u := randUser()
+	// k := randStr()
+	// u := randUser()
+	k := keys4000[0]
+	u := localUserMap4000[keys4000[0]].(User)
 	store.Set(k, u)
 	var u2 User
 	store.Get(k, &u2)
-	assert(u.ID == u2.ID)
+	// assert(u.ID == u2.ID)
 }
 
 // check -------------
@@ -295,7 +320,14 @@ var redisWrap KeyValueStore = NewRedisWrapper("127.0.0.1:6379")
 var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
 var names = []string{"smMaster", "smSlave ", "redis   "}
 
+// var stores = []KeyValueStore{smMaster}
+// var names = []string{"smMaster"}
+
 func main() {
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+	// time.Sleep(3000 * time.Millisecond)
 	t := 10
 	Test3(TestGetSetInt, t)
 	Test3(TestGetSetUser, t)
@@ -306,6 +338,10 @@ func main() {
 	Test3(TestMGetMSetInt, 1)
 	TestMasterSlaveInterpret()
 	fmt.Println("-----------BENCH----------")
-	Test3(BenchMGetMSetUser4000, 1)
+	InitForBenchMGetMSetUser4000()
+	for i := 0; i < 2; i++ {
+		Test3(BenchMGetMSetStr10000, 1)
+		Test3(BenchMGetMSetUser4000, 1)
+	}
 	Test3(BenchGetSetUser, 4000)
 }

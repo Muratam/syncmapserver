@@ -180,6 +180,10 @@ func writeAll(conn net.Conn, content []byte) {
 // <-> []string    :: joinStrsToBytes <-> splitBytesToStrs
 // <-> string      :: byte[]()       <-> string()
 func encodeToBytes(x interface{}) []byte {
+	if p, ok := x.(User); ok {
+		byf, _ := p.Marshal([]byte{})
+		return byf
+	}
 	var buf bytes.Buffer
 	err := gob.NewEncoder(&buf).Encode(x)
 	if err != nil {
@@ -190,6 +194,10 @@ func encodeToBytes(x interface{}) []byte {
 
 // 変更できるようにpointer型で受け取ること
 func decodeFromBytes(bytes_ []byte, x interface{}) {
+	if p, ok := x.(*User); ok {
+		(*p).Unmarshal(bytes_)
+		return
+	}
 	var buf bytes.Buffer
 	buf.Write(bytes_)
 	dec := gob.NewDecoder(&buf)

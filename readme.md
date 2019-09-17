@@ -42,4 +42,28 @@
 
 
 # ベンチマークと動作テスト
-1. syncmap / rediswrapper の速度の比較と動作テスト keyvaluestore.go でしています
+
+syncmap / rediswrapper の速度の比較と動作テスト keyvaluestore.go でしています
+
+```
+-------  main.BenchMGetMSetUser4000  x  1  -------
+smMaster : 292 ms
+smSlave  : 327 ms
+redis    : 308 ms
+-------  main.BenchGetSetUser  x  4000  -------
+smMaster : 305 ms
+smSlave  : 2164 ms
+redis    : 852 ms
+```
+
+この結果を見ると分かること
+
+-  Masterサーバーの操作は速い。オーバーヘッドがないから当然。
+- エンコード/デコードにはそこまで時間がかかっていない。 MGet/MSetで莫大な量を変換しているがそこまで差がでていないことから
+- Slave-MasterへのTCPがクソ重い。ぐお〜〜〜〜〜
+  - コネクションプール形式にできるんじゃね？
+- 詳細
+  - 300ms のうちデータの生成にかかるのが150msほど。これは無視して良い。
+  - 150ms のうち殆どがEncode/Decodeにかかる時間。
+  - gencodeを使うとこの時間を1/10にできる。あとはTCPを倒すだけ。
+    - `gencode go -schema main.schema -package main`
