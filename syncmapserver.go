@@ -166,6 +166,11 @@ func writeAll(conn net.Conn, content []byte) {
 	conn.Write(content)
 }
 
+// []byte
+// <-> interface{} :: encodeToBytes  <-> decodeFromBytes
+// <-> [][]byte    :: join           <-> split
+// <-> []string    :: joinStrsToBytes <-> splitBytesToStrs
+// <-> string      :: byte[]()       <-> string()
 func encodeToBytes(x interface{}) []byte {
 	var buf bytes.Buffer
 	err := gob.NewEncoder(&buf).Encode(x)
@@ -192,6 +197,14 @@ func join(input [][]byte) []byte {
 func split(input []byte) [][]byte {
 	var result [][]byte
 	decodeFromBytes(input, &result)
+	return result
+}
+func joinStrsToBytes(input []string) []byte {
+	return encodeToBytes(input)
+}
+func splitBytesToStrs(bytes_ []byte) []string {
+	var result []string
+	decodeFromBytes(bytes_, &result)
 	return result
 }
 
@@ -279,8 +292,7 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		this.lsetImpl(string(ss[1]), index, ss[3], true, false)
 	// Multi Command (for N+1)
 	case syncMapCommandMGet:
-		var keys []string
-		decodeFromBytes(ss[1], &keys)
+		keys := splitBytesToStrs(ss[1])
 		var result [][]byte
 		for _, key := range keys {
 			loaded, ok := this.loadDirect(key)
@@ -292,8 +304,7 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 		}
 		return join(result)
 	case syncMapCommandMSet:
-		var keys []string
-		decodeFromBytes(ss[1], &keys)
+		keys := splitBytesToStrs(ss[1])
 		values := split(ss[2])
 		for i, key := range keys {
 			value := values[i]
@@ -389,7 +400,7 @@ func (this *SyncMapServer) mgetImpl(keys []string, forceConnection bool) MGetRes
 		recieved := this.send(func() []byte {
 			return join([][]byte{
 				[]byte(syncMapCommandMGet),
-				encodeToBytes(keys),
+				joinStrsToBytes(keys),
 			})
 		}, forceConnection)
 		encodedValues := split(recieved)
@@ -428,7 +439,7 @@ func (this *SyncMapServer) msetImpl(store map[string]interface{}, forceConnectio
 			}
 			return join([][]byte{
 				[]byte(syncMapCommandMSet),
-				encodeToBytes(keys),
+				joinStrsToBytes(keys),
 				join(savedValues),
 			})
 		}, forceConnection)

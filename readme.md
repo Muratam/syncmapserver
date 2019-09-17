@@ -29,14 +29,11 @@
 
 
 # やるだけ
-1. テストをきちんと書いておきたい。GoDocみたいなのが欲しい。
 1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
 1. TODO: 一つのキーに保存された list の 全てを一括取得も実装しておきたい
 1. join / split はもっと高速化できそう(EncodeAt/DecodeByをちゃんとjoin/splitに置き換える)
-1. 過去にRedisを使っていたものを代替してテストしておきたい
-1. アクセスキーの解析ができるようになると便利そう
-1. 本家は RPush が一度に複数送信できるっぽい
-
+- METHOD:
+  - 本家は RPush が一度に複数送信できるっぽい
 # ISUCONでの使用時のヒント
 - https://github.com/Muratam/isucon9q/blob/nouser/postapi.go
   - DBからのSQLでの読み込み は initializeUsersDB()

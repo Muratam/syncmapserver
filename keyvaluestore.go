@@ -20,7 +20,7 @@ type KeyValueStoreCore interface { // ptr は参照を着けてLoadすること�
 	Del(key string)
 	IncrBy(key string, value int) int
 	DBSize() int // means key count
-	// Keys() []string
+	// Keys() []string TODO:
 	FlushAll()
 	// List 関連
 	RPush(key string, value interface{}) int // Push後の 自身の index を返す
