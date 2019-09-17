@@ -20,7 +20,7 @@ type KeyValueStoreCore interface { // ptr は参照を着けてLoadすること�
 	Del(key string)
 	IncrBy(key string, value int) int
 	DBSize() int // means key count
-	// Keys() []string TODO:
+	// Keys() []string
 	FlushAll()
 	// List 関連
 	RPush(key string, value interface{}) int // Push後の 自身の index を返す
@@ -53,6 +53,25 @@ func randStr() string {
 	}
 	return result
 }
+func randUser() User {
+	return User{
+		ID:           int64(random()),
+		AccountName:  randStr(),
+		Address:      randStr(),
+		NumSellItems: random(),
+		LastBump:     time.Now().Truncate(time.Second),
+		CreatedAt:    time.Now().Truncate(time.Second),
+	}
+}
+
+type User struct {
+	ID           int64     `json:"id" db:"id"`
+	AccountName  string    `json:"account_name" db:"account_name"`
+	Address      string    `json:"address,omitempty" db:"address"`
+	NumSellItems int       `json:"num_sell_items" db:"num_sell_items"`
+	LastBump     time.Time `json:"-" db:"last_bump"`
+	CreatedAt    time.Time `json:"-" db:"created_at"`
+}
 
 func TestGetSetInt(store KeyValueStore) {
 	// int を Get して Set するだけの 一番基本的なやつ
@@ -72,22 +91,7 @@ func TestGetSetInt(store KeyValueStore) {
 func TestGetSetUser(store KeyValueStore) {
 	// userデータ を Get して Set するだけ
 	// Pointer 型 は渡せないことに注意。struct in struct は多分大丈夫。
-	type User struct {
-		ID           int64     `json:"id" db:"id"`
-		AccountName  string    `json:"account_name" db:"account_name"`
-		Address      string    `json:"address,omitempty" db:"address"`
-		NumSellItems int       `json:"num_sell_items" db:"num_sell_items"`
-		LastBump     time.Time `json:"-" db:"last_bump"`
-		CreatedAt    time.Time `json:"-" db:"created_at"`
-	}
-	u := User{
-		ID:           int64(random()),
-		AccountName:  randStr(),
-		Address:      randStr(),
-		NumSellItems: random(),
-		LastBump:     time.Now().Truncate(time.Second),
-		CreatedAt:    time.Now().Truncate(time.Second),
-	}
+	u := randUser()
 	store.Set("u", u)
 	var u2 User
 	store.Get("u", &u2)
@@ -159,26 +163,11 @@ func TestMGetMSetString(store KeyValueStore) {
 }
 
 func TestMGetMSetUser(store KeyValueStore) {
-	type User struct {
-		ID           int64     `json:"id" db:"id"`
-		AccountName  string    `json:"account_name" db:"account_name"`
-		Address      string    `json:"address,omitempty" db:"address"`
-		NumSellItems int       `json:"num_sell_items" db:"num_sell_items"`
-		LastBump     time.Time `json:"-" db:"last_bump"`
-		CreatedAt    time.Time `json:"-" db:"created_at"`
-	}
 	var keys []string
 	localMap := map[string]interface{}{}
 	for i := 0; i < 1000; i++ {
 		key := "k" + strconv.Itoa(i)
-		u := User{
-			ID:           int64(random()),
-			AccountName:  randStr(),
-			Address:      randStr(),
-			NumSellItems: random(),
-			LastBump:     time.Now().Truncate(time.Second),
-			CreatedAt:    time.Now().Truncate(time.Second),
-		}
+		u := randUser()
 		localMap[key] = u
 		keys = append(keys, key)
 	}
@@ -217,10 +206,69 @@ func TestMGetMSetInt(store KeyValueStore) {
 		assert(proValue == preValue)
 	}
 }
+func TestMasterSlaveInterpret() {
+	func() {
+		smMaster.FlushAll()
+		u := randUser()
+		smSlave.Set("k1", u)
+		var u1 User
+		smMaster.Get("k1", &u1)
+		assert(u == u1)
+		var u2 User
+		smSlave.Get("k1", &u2)
+		assert(u == u2)
+	}()
+	func() {
+		smMaster.FlushAll()
+		u := randUser()
+		smMaster.Set("k1", u)
+		var u1 User
+		smMaster.Get("k1", &u1)
+		assert(u == u1)
+		var u2 User
+		smSlave.Get("k1", &u2)
+		assert(u == u2)
+	}()
+	func() {
+		smMaster.FlushAll()
+		u := randUser()
+		smSlave.MSet(map[string]interface{}{"k1": u, "k2": u, "k3": u})
+		var u1 User
+		smMaster.Get("k1", &u1)
+		assert(u == u1)
+		var u2 User
+		smSlave.Get("k2", &u2)
+		assert(u == u2)
+	}()
+	fmt.Println("-------  Master Slave Test Passed  -------")
+}
+
+func BenchMGetMSetUser4000(store KeyValueStore) {
+	var keys []string
+	localMap := map[string]interface{}{}
+	for i := 0; i < 4000; i++ {
+		key := randStr()
+		localMap[key] = randUser()
+		keys = append(keys, key)
+	}
+	store.MSet(localMap)
+	mgetResult := store.MGet(keys)
+	for key, preValue := range localMap {
+		var proValue User
+		mgetResult.Get(key, &proValue)
+		assert(proValue.ID == preValue.(User).ID)
+	}
+}
+func BenchGetSetUser(store KeyValueStore) {
+	k := randStr()
+	u := randUser()
+	store.Set(k, u)
+	var u2 User
+	store.Get(k, &u2)
+	assert(u.ID == u2.ID)
+}
 
 // check -------------
-// Speed(redisとの比較 set / mset...)
-// Set - MGet - Master - Slave
 // List Push の速度 (use ptr ?)
 // Lock を解除したい(RPush / LSet)
 // Transactionをチェックしたい
@@ -256,4 +304,8 @@ func main() {
 	Test3(TestMGetMSetString, 1)
 	Test3(TestMGetMSetUser, 1)
 	Test3(TestMGetMSetInt, 1)
+	TestMasterSlaveInterpret()
+	fmt.Println("-----------BENCH----------")
+	Test3(BenchMGetMSetUser4000, 1)
+	Test3(BenchGetSetUser, 4000)
 }
