@@ -46,7 +46,12 @@ func decodeFromBytes(bytes_ []byte, x interface{}) {
 }
 
 func (this RedisWrapper) Get(key string, value interface{}) bool {
-	bs, err := this.Redis.Get(key).Bytes()
+	got := this.Redis.Get(key)
+	if gotInt, err := got.Int(); err == nil {
+		(*value.(*int)) = gotInt
+		return true
+	}
+	bs, err := got.Bytes()
 	if err != nil {
 		return false
 	}
@@ -54,9 +59,19 @@ func (this RedisWrapper) Get(key string, value interface{}) bool {
 	return true
 }
 func (this RedisWrapper) Set(key string, value interface{}) {
+	if valueInt, ok := value.(int); ok {
+		this.Redis.Set(key, valueInt, 0)
+		return
+	}
 	bs := encodeToBytes(value)
 	this.Redis.Set(key, bs, 0)
 }
+
+func (this RedisWrapper) IncrBy(key string, value int) int {
+	return int(this.Redis.IncrBy(key, int64(value)).Val())
+}
+
+// Val()
 func (this RedisWrapper) FlushAll() {
 	this.Redis.FlushAll()
 }

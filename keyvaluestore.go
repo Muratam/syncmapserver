@@ -18,7 +18,7 @@ type KeyValueStoreCore interface { // ptr は参照を着けてLoadすること�
 	// MGet(keys []string, values []interface{})
 	// Exists(key string) bool
 	// Del(key string)
-	// IncrBy(key string, value int) int
+	IncrBy(key string, value int) int
 	// KeysCount() int
 	// Keys() []string TODO:
 	FlushAll()
@@ -37,6 +37,9 @@ type KeyValueStore interface {
 	KeyValueStoreCore
 	// StartTransaction(f func(tx *KeyValueStoreCore))
 }
+
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
 
 func assert(cond bool) {
 	if !cond {
@@ -90,14 +93,30 @@ func TestGetSetUser(store KeyValueStore) {
 	assert(u == u2)
 	// fmt.Print(u, u2)
 }
+func TestIncrBy(store KeyValueStore) {
+	n := random()
+	x := 0
+	store.Set("x", n)
+	store.Get("x", &x)
+	assert(x == n)
+	pre := n
+	add := random()
+	added1 := store.IncrBy("x", add)
+	added2 := 0
+	store.Get("x", &added2)
+	assert(added1 == added2)
+	assert(added1 == pre+add)
+}
 
-func Test3(f func(store KeyValueStore)) {
+func Test3(f func(store KeyValueStore), times int) {
 	rand.Seed(time.Now().UnixNano())
-	fmt.Println("------- ", runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name(), " -------")
+	fmt.Println("------- ", runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name(), " x ", times, " -------")
 	for i, store := range stores {
 		store.FlushAll()
 		start := time.Now()
-		f(store)
+		for j := 0; j < times; j++ {
+			f(store)
+		}
 		fmt.Println(names[i], ":", time.Now().Sub(start))
 	}
 }
@@ -110,6 +129,7 @@ var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
 var names = []string{"smMaster", "smSlave", "redis"}
 
 func main() {
-	Test3(TestGetSetInt)
-	Test3(TestGetSetUser)
+	Test3(TestGetSetInt, 100)
+	Test3(TestGetSetUser, 100)
+	Test3(TestIncrBy, 100)
 }

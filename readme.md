@@ -1,8 +1,11 @@
 # Go SyncMap Server
 
-SyncMap でRedis的なことを頑張るサーバー。Goアプリの上で動かすのが特徴。
-ISUCONに特化した最適化をすることで、すごい速度を実現。
-Master と Slave に分かれており、Masterを動かしているGoアプリはTCPを経由せずにデータを扱える。
+- SyncMap でRedis的なことを頑張るサーバー。Goアプリの上で動かす。
+- ISUCONに特化した最適化をすることで、すごい速度を実現。
+- Master と Slave に分かれており、Masterを動かしているGoアプリはTCPを経由せずにデータを扱える。
+- キーバリューストア型のDB。
+- 同梱のRedisWrapperも KeyValueStore interface を持っているので一瞬で切り替えることが可能、もしものときにも安心。
+
 
 ## Redisよりも 速い
 - On Memory なのでそもそも速い
@@ -40,8 +43,6 @@ Master と Slave に分かれており、Masterを動かしているGoアプリ�
   - 特定のキーのみのロック(+1人目のトランザクションが成功したら終了) は postBuy()
   - 要求があってから初めて接続を開始するので複数台でも起動順序は問われない。
 
-# DBに対する欠点
-- キーバリューストア型なので、MySQLができるような幅広い操作は不可能。
 
 # ベンチマーク
-1. TODO: Redisコンパチブルにしたら測れる(どちらもTCP経由の条件で)
+1. syncmap / rediswrapper の速度の比較を keyvaluestore.go でしています
