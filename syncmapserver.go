@@ -201,25 +201,40 @@ func decodeFromBytes(bytes_ []byte, x interface{}) {
 
 func join(input [][]byte) []byte {
 	return encodeToBytes(input)
-	// // 要素数 4B (32bit)
-	// // 各長さ 4B x 要素数 (32bit)
-	// // データ中身 各長さ x 要素数
-	// size := 0
-	// for _, bs := range input {
-	// 	size += len(bs)
+	// 上ので十分速いので
+	// 要素数 4B (32bit)
+	// (各長さ 4B + データ)を 要素数回
+	// totalSize := 4 + len(input)*4
+	// num := len(input)
+	// for i := 0; i < num; i++ {
+	// 	totalSize += len(input[i])
 	// }
-	// result := make([]byte, size)
-	// now := 0
+	// result := make([]byte, totalSize)
+	// copy(result[0:4], format32bit(num))
+	// now := 4
 	// for _, bs := range input {
-	// 	copy(result[now:now+len(bs)], bs[:])
-	// 	now += len(bs)
+	// 	bsLen := len(bs)
+	// 	copy(result[now:4+now], format32bit(bsLen))
+	// 	now += 4
+	// 	copy(result[now:now+bsLen], bs[:])
+	// 	now += bsLen
 	// }
 	// return result
 }
 func split(input []byte) [][]byte {
-	var result [][]byte
-	decodeFromBytes(input, &result)
-	return result
+	var x [][]byte
+	decodeFromBytes(input, &x)
+	return x
+	// num := parse32bit(input[:4])
+	// now := 4
+	// result := make([][]byte, num)
+	// for i := 0; i < num; i++ {
+	// 	bsLen := parse32bit(input[now : now+4])
+	// 	now += 4
+	// 	result[i] = input[now : now+bsLen]
+	// 	now += bsLen
+	// }
+	// return result
 }
 func joinStrsToBytes(input []string) []byte {
 	return encodeToBytes(input)
