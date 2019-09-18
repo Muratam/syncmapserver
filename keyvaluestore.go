@@ -334,16 +334,17 @@ var smMaster KeyValueStore = NewSyncMapServer("127.0.0.1:8080", true)
 var smSlave KeyValueStore = NewSyncMapServer("127.0.0.1:8080", false)
 var redisWrap KeyValueStore = NewRedisWrapper("127.0.0.1:6379")
 
-var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
-var names = []string{"smMaster", "smSlave ", "redis   "}
-
+// var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
+// var names = []string{"smMaster", "smSlave ", "redis   "}
 // var stores = []KeyValueStore{smMaster, redisWrap}
 // var names = []string{"smMaster", "redis   "}
+var stores = []KeyValueStore{smSlave}
+var names = []string{"smSlave "}
 
 func TestTransaction(store KeyValueStore) {
 	// とりあえず IncrByのみ
 	store.Set("a", 0)
-	Execute(1000, false, func() {
+	Execute(10000, true, func() {
 		store.IncrBy("a", 1)
 	})
 	fmt.Println(store.IncrBy("a", 0))
@@ -353,7 +354,9 @@ func main() {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	Test3(TestTransaction, 1)
+	for {
+		Test3(TestTransaction, 1)
+	}
 	// t := 10
 	// Test3(TestGetSetInt, t)
 	// Test3(TestGetSetUser, t)

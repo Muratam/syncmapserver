@@ -7,20 +7,21 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"math/rand"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/golang-collections/collections/stack"
 )
 
 // NOTE: package syncmapserver を main とかに変える
 // NOTE: 環境変数 REDIS_HOST に 12.34.56.78 などのIPアドレスを入れる
 // NOTE: Redis ラッパーも書くが、ISUCON中はこちらだけ使うことで高速に
 
-const maxSyncMapServerConnectionNum = 15
+const maxSyncMapServerConnectionNum = 50
 const defaultReadBufferSize = 8192                  // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
 const RedisHostPrivateIPAddress = "192.168.111.111" // ここで指定したサーバーに
 // ` NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
@@ -55,8 +56,10 @@ type SyncMapServer struct {
 	substanceAddress string
 	masterPort       int
 	// コネクションはプールして再利用する
-	connectionPool       []net.Conn
-	connectionPoolStatus []MutexInt
+	connectionPool                     []net.Conn
+	connectionPoolStatus               []int
+	connectionPoolEmptyIndexStack      *stack.Stack
+	connectionPoolEmptyIndexStackMutex sync.Mutex
 	// 関数をカスタマイズする用
 	MySendCustomFunction func(this *SyncMapServer, buf []byte) []byte
 	// 全体としてのロック用
@@ -64,9 +67,11 @@ type SyncMapServer struct {
 	IsLocked bool
 }
 
-const ConnectionPoolStatusDisconnected = 0 // 未接続の状態
-const ConnectionPoolStatusUsing = 1        //
-const ConnectionPoolStatusEmpty = 2
+const (
+	ConnectionPoolStatusDisconnected = iota // = 0 未接続
+	ConnectionPoolStatusUsing
+	ConnectionPoolStatusEmpty
+)
 
 type SyncMapServerTransaction struct {
 	server      *SyncMapServer
@@ -1003,7 +1008,11 @@ func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	this.MySendCustomFunction = func(this *SyncMapServer, buf []byte) []byte { return buf }
 	// WARN: Transaction時は強引に作成するので想定数よりも増えるので多めに確保
 	this.connectionPool = make([]net.Conn, maxSyncMapServerConnectionNum*10)
-	this.connectionPoolStatus = make([]MutexInt, maxSyncMapServerConnectionNum*10)
+	this.connectionPoolStatus = make([]int, maxSyncMapServerConnectionNum*10)
+	this.connectionPoolEmptyIndexStack = stack.New()
+	for i := 0; i < maxSyncMapServerConnectionNum; i++ {
+		this.connectionPoolEmptyIndexStack.Push(i)
+	}
 	// 要求があって初めて接続する。再起動試験では起動順序が一律ではないため。
 	// Redisがそういう仕組みなのでこちらもそのようにしておく
 	return this
@@ -1122,27 +1131,36 @@ func (this *SyncMapServer) send(f func() []byte, force bool) []byte {
 func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
 	poolIndex := -1
 	poolStatus := -1
-	findEmptyConnection := func(startIndex, endIndex int) {
+	sleep := func() {
+		time.Sleep(1 * time.Nanosecond)
+		// time.Sleep(time.Duration(1000+rand.Intn(4000)) * time.Nanosecond)
+	}
+	// Lockの回数を減らしたい。
+	// この関数は0のときにはLockしてその後1減らす。
+	findEmptyConnection := func() {
 		for {
-			for i := 0; i < maxSyncMapServerConnectionNum; i++ {
-				this.connectionPoolStatus[i].Transaction(func(in int) int {
-					if in != ConnectionPoolStatusUsing {
-						poolStatus = in
-					}
-					return ConnectionPoolStatusUsing
-				})
-				if poolStatus != -1 { // 空いているのがあった！
-					poolIndex = i
-					return
-				}
+			// Lock とかするまえにそもそも 0 なら望みがない
+			if this.connectionPoolEmptyIndexStack.Len() == 0 {
+				sleep()
+				continue
 			}
-			time.Sleep(time.Duration(100+rand.Intn(400)) * time.Nanosecond)
+			this.connectionPoolEmptyIndexStackMutex.Lock()
+			if this.connectionPoolEmptyIndexStack.Len() == 0 {
+				this.connectionPoolEmptyIndexStackMutex.Unlock()
+				sleep()
+				continue
+			}
+			poolIndex = this.connectionPoolEmptyIndexStack.Pop().(int)
+			this.connectionPoolEmptyIndexStackMutex.Unlock()
+			poolStatus = this.connectionPoolStatus[poolIndex]
+			return
 		}
 	}
 	if !force {
-		findEmptyConnection(0, maxSyncMapServerConnectionNum)
-	} else {
-		findEmptyConnection(maxSyncMapServerConnectionNum, maxSyncMapServerConnectionNum*10)
+		findEmptyConnection()
+	} else { // TODO: 意味がなくなっている
+		log.Panic("Not Implementent Transaction")
+		// findEmptyConnection(maxSyncMapServerConnectionNum, maxSyncMapServerConnectionNum*10)
 	}
 	conn := this.connectionPool[poolIndex]
 	if poolStatus == ConnectionPoolStatusDisconnected {
@@ -1153,8 +1171,7 @@ func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
 				newConn.Close()
 			}
 			time.Sleep(1 * time.Millisecond)
-			// もう専有しているので Set するのに Lockする必要はない。
-			this.connectionPoolStatus[poolIndex].val = ConnectionPoolStatusDisconnected
+			this.connectionPoolStatus[poolIndex] = ConnectionPoolStatusDisconnected
 			return this.sendBySlave(f, force)
 		}
 		conn = newConn
@@ -1162,8 +1179,10 @@ func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
 	writeAll(conn, f())
 	result := readAll(conn)
 	this.connectionPool[poolIndex] = conn
-	// もう専有しているので Set するのに Lockする必要はない。
-	this.connectionPoolStatus[poolIndex].val = ConnectionPoolStatusEmpty
+	this.connectionPoolStatus[poolIndex] = ConnectionPoolStatusEmpty
+	this.connectionPoolEmptyIndexStackMutex.Lock()
+	this.connectionPoolEmptyIndexStack.Push(poolIndex)
+	this.connectionPoolEmptyIndexStackMutex.Unlock()
 	return result
 }
 
