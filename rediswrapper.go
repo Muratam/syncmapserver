@@ -4,6 +4,7 @@ package main
 // どうせシリアライズする必要があるので、 int 値以外は全て[]byteにしている。
 //  (int値は IncrByの都合上そのまま置く必要があるので[]byteにしていない)
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/go-redis/redis"
@@ -117,4 +118,19 @@ func (this RedisWrapper) LSet(key string, index int, value interface{}) {
 
 func (this RedisWrapper) FlushAll() {
 	this.Redis.FlushAll()
+}
+
+func (this RedisWrapper) StartTransactionWithKey(key string, f func(tx *KeyValueStoreTransaction)) {
+	err := this.Redis.Watch(func(tx *redis.Tx) error {
+		_, err = tx.Pipelined(func(pipe redis.Pipeliner) error {
+			f(pipe)
+			// count, err = pipe.Get("key").Int()
+			// pipe.Set("key", count+1, 0)
+			return nil
+		})
+		return err
+	}, key)
+	if err != nil {
+		fmt.Panic("Redisのトランザクションに失敗しました", err)
+	}
 }

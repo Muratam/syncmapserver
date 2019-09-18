@@ -14,32 +14,6 @@ import (
 	"time"
 )
 
-// Redis と SyncMapSercer の違いを吸収
-type KeyValueStoreCore interface { // ptr は参照を着けてLoadすることを示す
-	// Normal Command
-	Get(key string, value interface{}) bool // ptr (キーが無ければ false)
-	Set(key string, value interface{})
-	MGet(keys []string) MGetResult     // 改めて Get するときに ptr
-	MSet(store map[string]interface{}) // 先に対応Mapを作りそれをMSet
-	Exists(key string) bool
-	Del(key string)
-	IncrBy(key string, value int) int
-	DBSize() int // means key count
-	// Keys() []string TODO:
-	FlushAll()
-	// List 関連
-	RPush(key string, value interface{}) int // Push後の 自身の index を返す
-	LLen(key string) int
-	LIndex(key string, index int, value interface{}) bool // ptr (キーが無ければ false)
-	LSet(key string, index int, value interface{})
-	// LRange(key string, start, stop int, values []interface{}) // ptr(0,-1 で全て取得可能) TODO:
-}
-
-type KeyValueStore interface {
-	KeyValueStoreCore
-	// StartTransaction(f func(tx *KeyValueStoreCore))
-}
-
 /////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////
 
@@ -306,14 +280,30 @@ func BenchMGetMSetStr4000(store KeyValueStore) {
 	}
 }
 func BenchGetSetUser(store KeyValueStore) {
-	// k := randStr()
-	// u := randUser()
 	k := keys4000[0]
 	u := localUserMap4000[keys4000[0]].(User)
 	store.Set(k, u)
 	var u2 User
 	store.Get(k, &u2)
-	// assert(u.ID == u2.ID)
+	assert(u.ID == u2.ID)
+}
+func BenchParallelIncryBy(store KeyValueStore) {
+	store.Set("a", 0)
+	Execute(10000, true, func(i int) {
+		store.IncrBy("a", i)
+	})
+	fmt.Println(store.IncrBy("a", 0) == 49995000)
+}
+
+func BenchParallelUserGetSet(store KeyValueStore) {
+	Execute(10000, true, func(i int) {
+		key := keys4000[i%4000]
+		preValue := localUserMap4000[key]
+		store.Set(key, preValue)
+		proValue := User{}
+		store.Get(key, &proValue)
+		assert(preValue == proValue)
+	})
 }
 
 // check -------------
@@ -340,7 +330,7 @@ func Test3(f func(store KeyValueStore), times int) (milliSecs []int64) {
 func TestAverage3(f func(store KeyValueStore), times int) {
 	milliSecs := make([]int64, len(stores))
 	for n := 1; n < times; n++ {
-		resMilliSecs := Test3(TestTransaction, 1)
+		resMilliSecs := Test3(f, 1)
 		fmt.Println("AVERAGE:")
 		for i := 0; i < len(milliSecs); i++ {
 			milliSecs[i] += resMilliSecs[i]
@@ -364,20 +354,6 @@ var names = []string{"smMaster", "smSlave ", "redis   "}
 // var stores = []KeyValueStore{smMaster}
 // var names = []string{"smMaster"}
 
-func TestTransaction(store KeyValueStore) {
-	// とりあえず IncrByのみ
-	Execute(10000, false, func(i int) {
-		key := keys4000[i%4000]
-		preValue := localUserMap4000[key]
-		store.Set(key, preValue)
-		proValue := User{}
-		store.Get(key, &proValue)
-		assert(preValue == proValue)
-		// store.IncrBy("a", 1) // 都合上Redisのほうが速い
-	})
-	// fmt.Println(store.IncrBy("a", 0))
-}
-
 func main() {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
@@ -393,11 +369,9 @@ func main() {
 	Test3(TestMGetMSetInt, 1)
 	TestMasterSlaveInterpret()
 	fmt.Println("-----------BENCH----------")
-	for i := 0; i < 1; i++ {
-		Test3(BenchMGetMSetStr4000, 3)
-		Test3(BenchMGetMSetUser4000, 1)
-		Test3(BenchGetSetUser, 4000)
-	}
-	TestAverage3(TestTransaction, 1000)
-
+	Test3(BenchMGetMSetStr4000, 3)
+	Test3(BenchMGetMSetUser4000, 1)
+	Test3(BenchGetSetUser, 4000)
+	// TestAverage3(BenchParallelIncryBy, 1) // NOTE: IncrBy は実装が悪いので Redisのほうがやや速い
+	TestAverage3(BenchParallelUserGetSet, 1000)
 }

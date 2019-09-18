@@ -18,17 +18,11 @@ import (
 	"github.com/golang-collections/collections/stack"
 )
 
-// NOTE: package syncmapserver を main とかに変える
-// NOTE: 環境変数 REDIS_HOST に 12.34.56.78 などのIPアドレスを入れる
-// NOTE: Redis ラッパーも書くが、ISUCON中はこちらだけ使うことで高速に
-// NOTE: 同時にリクエストされるGoroutine の数が maxSyncMapServerConnectionNum に比べて多いと性能が落ちる。ものすごい多いと peer する
-const maxSyncMapServerConnectionNum = 100           // TODO: 自動でスケールさせたい
 const defaultReadBufferSize = 8192                  // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
 const RedisHostPrivateIPAddress = "192.168.111.111" // ここで指定したサーバーに
-// ` NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
-// とすることでSyncMapServerを建てることができる
+// `NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
 const SyncMapBackUpPath = "./syncmapbackup-" // カレントディレクトリにバックアップを作成。パーミッションに注意。
-const DefaultBackUpTimeSecond = 30           // この秒数毎にバックアップファイルを作成する
+const DefaultBackUpTimeSecond = 30           // この秒数毎にバックアップファイルを作成する(デフォルトでBackUpが作成される設定)
 
 func MyServerIsOnMasterServerIP() bool {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
@@ -49,71 +43,99 @@ func GetMasterServerAddress() string {
 
 // SyncMapServer
 type SyncMapServer struct {
+	// データ毎に保存場所/コネクションを臨機応変に変えられるので分散しやすい.
 	SyncMap   sync.Map // string -> (byte[] | byte[][])
-	mutexMap  sync.Map // string -> sync.Mutex
+	mutexMap  sync.Map // string -> *sync.Mutex
 	lockedMap sync.Map // string -> bool
-	KeyCount  int32
+	keyCount  int32
 	// 接続情報
 	substanceAddress string
 	masterPort       int
+	// 同時にリクエストされるGoroutine の数がこれに比べて多いと性能が落ちる。
+	// かといってものすごい多いと peer する. 16 ~ 100 くらいが安定か？
+	// アクセス数に応じて調整すると吉
+	maxSyncMapServerConnectionNum int
 	// コネクションはプールして再利用する
 	connectionPool                     [](*net.TCPConn)
 	connectionPoolStatus               []int
 	connectionPoolEmptyIndexStack      *stack.Stack
 	connectionPoolEmptyIndexStackMutex sync.Mutex
-	// 関数をカスタマイズする用
-	MySendCustomFunction func(this *SyncMapServer, buf []byte) []byte
-	// 全体としてのロック用
-	mutex    sync.Mutex
-	IsLocked bool
+	// 関数をカスタマイズする用.強引に複数台で同期したいときに便利。
+	MySendCustomFunction func(this SyncMapServer, buf []byte) []byte
 }
 
-const (
+const ( // connectionPoolStatus
 	ConnectionPoolStatusDisconnected = iota // = 0 未接続
 	ConnectionPoolStatusUsing
 	ConnectionPoolStatusEmpty
 )
 
-type SyncMapServerTransaction struct {
-	server      *SyncMapServer
-	specificKey bool // 特定のキーのみロックするタイプのやつか
-	key         string
+type SyncMapServerConn struct {
+	server              *SyncMapServer
+	connectionPoolIndex int      // (Transaction+Slave時) このコネクションを使える
+	lockedKeys          []string // (Transaction時) これらのキーをロックしている
 }
 
-// NOTE: transaction中にno transactionなものが値を変えてくる可能性が十分にある
+const NoConnectionIsSelected = -1
+
+type KeyValueStoreConn interface { // ptr は参照を着けてLoadすることを示す
+	// Normal Command
+	Get(key string, value interface{}) bool // ptr (キーが無ければ false)
+	Set(key string, value interface{})
+	MGet(keys []string) MGetResult     // 改めて Get するときに ptr
+	MSet(store map[string]interface{}) // 先に対応Mapを作りそれをMSet
+	Exists(key string) bool
+	Del(key string)
+	IncrBy(key string, value int) int
+	DBSize() int // means key count
+	// Keys() []string TODO:
+	FlushAll()
+	// List 関連
+	RPush(key string, value interface{}) int // Push後の 自身の index を返す
+	LLen(key string) int
+	LIndex(key string, index int, value interface{}) bool // ptr (キーが無ければ false)
+	LSet(key string, index int, value interface{})
+	// LRange(key string, start, stop int, values []interface{}) // ptr(0,-1 で全て取得可能) TODO:
+	//  IsLocked(key string) は Redis には存在しない
+}
+
+type KeyValueStoreConnWithTransaction interface {
+	KeyValueStoreConn
+	Transaction(keys []string, f func()) (isok bool)
+}
+
+// 一旦 MGetResult を経由することで、重複するキーのロードを一回のロードで済ませられる
+type MGetResult struct {
+	resultMap map[string][]byte
+}
+
+// TODO: transaction中にno transactionなものが値を変えてくる可能性が十分にある
 //       特に STORE / DELETE はやっかい。だが、たいていこれらはTransactionがついているはずなのでそこまで注意をしなくてもよいのではないか
-var syncMapCommandGet = "G"         // get
-var syncMapCommandMGet = "MGET"     // multi get
-var syncMapCommandSet = "S"         // set
-var syncMapCommandMSet = "MSET"     // multi set
-var syncMapCommandExists = "EXISTS" // check if exists key
-var syncMapCommandDel = "D"         // delete
-var syncMapCommandIncrBy = "I"      // incrBy value
-var syncMapCommandDBSize = "DBSIZE" // stored key count
-// list (内部的に([]byte ではなく [][]byte として保存しているので) Set / Get は使えない)
-// 順序が関係ないものに使うと吉
-var syncMapCommandRPush = "RPUSH"   // append value to list(最初が空でも可能)
-var syncMapCommandLLen = "LLEN"     // len of list
-var syncMapCommandLIndex = "LINDEX" // get value from list
-var syncMapCommandLSet = "LSET"     // update value at index
-
-// 全てのキーをLockする。
-// NOTE: 現在は特定のキーのロックを見ていないのでLockAll()とLockKey()を併用するとデッドロックするかも。
-var syncMapCommandLockAll = "LOCK"     // start transaction
-var syncMapCommandUnlockAll = "UNLOCK" // end transaction
-var syncMapCommandIsLockedAll = "ISLOCKED"
-
-// 特定のキーをLockする。
-// それが解除されていれば、 特定のキーをロックする。
-var syncMapCommandLockKey = "LOCK_K"     // lock a key
-var syncMapCommandUnlockKey = "UNLOCK_K" // unlock a key
-var syncMapCommandIsLockedKey = "ISLOCKED_K"
-
-// そのほか
-var syncMapCommandFlushAll = "FLUSHALL"
-var syncMapCommandCustom = "CUSTOM" // custom
-
-// NOTE: LIST_GET_ALL 欲しい？
+const (
+	syncMapCommandGet    = "G"      // get
+	syncMapCommandMGet   = "MGET"   // multi get
+	syncMapCommandSet    = "S"      // set
+	syncMapCommandMSet   = "MSET"   // multi set
+	syncMapCommandExists = "EXISTS" // check if exists key
+	syncMapCommandDel    = "D"      // delete
+	syncMapCommandIncrBy = "I"      // incrBy value
+	syncMapCommandDBSize = "DBSIZE" // stored key count
+	// list (内部的に([]byte ではなく [][]byte として保存しているので) Set / Get は使えない)
+	// 順序が関係ないものに使うと吉
+	syncMapCommandRPush  = "RPUSH"  // append value to list(最初が空でも可能)
+	syncMapCommandLLen   = "LLEN"   // len of list
+	syncMapCommandLIndex = "LINDEX" // get value from list
+	syncMapCommandLSet   = "LSET"   // update value at index
+	// 特定のキーをLockする。
+	// それが解除されていれば、 特定のキーをロックする。
+	syncMapCommandLockKey     = "LOCK_K"   // lock a key
+	syncMapCommandUnlockKey   = "UNLOCK_K" // unlock a key
+	syncMapCommandIsLockedKey = "ISLOCKED_K"
+	// そのほか
+	syncMapCommandFlushAll = "FLUSHALL"
+	syncMapCommandCustom   = "CUSTOM" // custom
+	// NOTE: LIST_GET_ALL 欲しい？
+)
 
 // bytes utils //////////////////////////////////////////
 // 20000Byteを超える際の Linux上での調子が悪いので、
@@ -248,7 +270,6 @@ func decodeFromBytes(input []byte, x interface{}) {
 		log.Panic(err)
 	}
 }
-
 func join(input [][]byte) []byte {
 	// 要素数 4B (32bit)
 	// (各長さ 4B + データ)を 要素数回
@@ -311,11 +332,418 @@ func splitBytesToStrs(input []byte) []string {
 	}
 	return result
 }
+func sbytes(s string) []byte {
+	return []byte(s)
+	// NOTE: かなり　unsafe なやりかたなので落ちるかもしれないが高速化可能
+	// return *(*[]byte)(unsafe.Pointer(&s))
+}
+func decodeBool(input []byte) bool {
+	result := true
+	decodeFromBytes(input, &result)
+	return result
+}
+func decodeInt(input []byte) int {
+	result := 0
+	decodeFromBytes(input, &result)
+	return result
+}
 
 // Sync Map Functions ///////////////////////////////////////////
-// デフォルトでBackUpが作成される
+// サーバーで受け取ってコマンドに対応する関数を実行
+func (this SyncMapServerConn) interpretWrapFunction(buf []byte) []byte {
+	input := split(buf)
+	if len(input) < 1 {
+		panic(nil)
+	}
+	switch string(input[0]) {
+	// General Commands
+	case syncMapCommandGet:
+		return this.parseGet(input)
+	case syncMapCommandSet:
+		this.parseSet(input)
+	case syncMapCommandMGet:
+		return this.parseMGet(input)
+	case syncMapCommandMSet:
+		this.parseMSet(input)
+	case syncMapCommandExists:
+		return this.parseExists(input)
+	case syncMapCommandDel:
+		this.parseDel(input)
+	case syncMapCommandIncrBy:
+		return this.parseIncrBy(input)
+	case syncMapCommandDBSize:
+		return this.parseDBSize(input)
+	// List Command
+	case syncMapCommandRPush:
+		return this.parseRPush(input)
+	case syncMapCommandLLen:
+		return this.parseLLen(input)
+	case syncMapCommandLIndex:
+		return this.parseLIndex(input)
+	case syncMapCommandLSet:
+		this.parseLSet(input)
+	case syncMapCommandIsLockedKey:
+		return this.parseIsLockedKey(input)
+	case syncMapCommandLockKey:
+		return this.parafreKey(input)
+	case syncMapCommandUnlockKey:
+		return this.parafreKey(input)
+	// Custom Command
+	case syncMapCommandCustom:
+		return this.parseCustomFunction(input)
+	case syncMapCommandFlushAll:
+		this.FlushAll()
+	default:
+		panic(nil)
+	}
+	return []byte("")
+}
 
-func NewSyncMapServer(substanceAddress string, isMaster bool) *SyncMapServer {
+// GET : 変更できるようにpointer型で受け取ること。
+func (this SyncMapServerConn) Get(key string, res interface{}) bool {
+	if this.IsMasterServer() {
+		return this.loadDirectWithDecoding(key, res)
+	}
+	loadedBytes := this.send(syncMapCommandGet, []byte(key))
+	if len(loadedBytes) == 0 {
+		return false
+	}
+	decodeFromBytes(loadedBytes, res)
+	return true
+}
+func (this SyncMapServerConn) parseGet(input [][]byte) []byte {
+	key := string(input[1])
+	value, ok := this.loadDirect(key)
+	if ok {
+		return value.([]byte)
+	}
+	return []byte{}
+}
+
+// SET
+func (this SyncMapServerConn) Set(key string, value interface{}) {
+	if this.IsMasterServer() {
+		this.storeDirectWithEncoding(key, value)
+	} else {
+		this.send(syncMapCommandSet, []byte(key), encodeToBytes(value))
+	}
+}
+func (this SyncMapServerConn) parseSet(input [][]byte) {
+	this.storeDirect(string(input[1]), input[2])
+}
+
+// MGET : 変更できるようにpointer型で受け取ること
+func (this SyncMapServerConn) MGet(keys []string, connIndex int) MGetResult {
+	result := newMGetResult()
+	if this.IsMasterServer() {
+		for _, key := range keys {
+			encoded, ok := this.loadDirect(key)
+			if ok {
+				result.resultMap[key] = encoded.([]byte)
+			}
+		}
+	} else {
+		recieved := this.send(syncMapCommandMGet, joinStrsToBytes(keys))
+		encodedValues := split(recieved)
+		for i, encodedValue := range encodedValues {
+			ok := encodedValue != nil && len(encodedValue) != 0
+			if ok {
+				result.resultMap[keys[i]] = encodedValue
+			}
+		}
+	}
+	return result
+}
+func (this SyncMapServerConn) parseMGet(input [][]byte) []byte {
+	keys := splitBytesToStrs(input[1])
+	var result [][]byte
+	for _, key := range keys {
+		loaded, ok := this.loadDirect(key)
+		if ok {
+			result = append(result, loaded.([]byte))
+		} else {
+			result = append(result, []byte(""))
+		}
+	}
+	return join(result)
+}
+func newMGetResult() MGetResult {
+	var result MGetResult
+	result.resultMap = map[string][]byte{}
+	return result
+}
+func (this MGetResult) Get(key string, value interface{}) bool {
+	encoded, ok := this.resultMap[key]
+	if !ok {
+		return false
+	}
+	decodeFromBytes(encoded, value)
+	return true
+}
+
+// MSET
+func (this SyncMapServerConn) MSet(store map[string]interface{}) {
+	if this.IsMasterServer() {
+		for key, value := range store {
+			this.storeDirectWithEncoding(key, value)
+		}
+	} else {
+		var savedValues [][]byte
+		var keys []string
+		for key, value := range store {
+			keys = append(keys, key)
+			savedValues = append(savedValues, encodeToBytes(value))
+		}
+		this.send(syncMapCommandMSet, joinStrsToBytes(keys), join(savedValues))
+	}
+}
+func (this SyncMapServerConn) parseMSet(input [][]byte) {
+	keys := splitBytesToStrs(input[1])
+	values := split(input[2])
+	for i, key := range keys {
+		value := values[i]
+		this.storeDirect(key, value)
+	}
+}
+
+// EXISTS
+func (this SyncMapServerConn) Exists(key string) bool {
+	if this.IsMasterServer() {
+		_, ok := this.loadDirect(key)
+		return ok
+	} else {
+		return decodeBool(this.send(syncMapCommandExists, []byte(key)))
+	}
+}
+func (this SyncMapServerConn) parseExists(input [][]byte) []byte {
+	return encodeToBytes(this.Exists(string(input[1])))
+}
+
+// DEL
+func (this SyncMapServerConn) Del(key string) {
+	if this.IsMasterServer() {
+		this.deleteDirect(key)
+	} else {
+		this.send(syncMapCommandDel, []byte(key))
+	}
+}
+func (this SyncMapServerConn) parseDel(input [][]byte) {
+	this.Del(string(input[1]))
+}
+
+// INCRBY
+// NOTE: Lockをするのでトランザクション時に呼び出すのはだめ
+func (this SyncMapServerConn) IncrBy(key string, value int) int {
+	if this.IsNowTransaction() {
+		log.Panic("デッドロックするのでtransaction中に呼び出すのはやめてください！")
+	}
+	if this.IsMasterServer() {
+		this.lockKey(key)
+		x := 0
+		this.loadDirectWithDecoding(key, &x)
+		x += value
+		this.storeDirectWithEncoding(key, x)
+		this.unlockKey(key)
+		return x
+	}
+	return decodeInt(this.send(syncMapCommandIncrBy, []byte(key), encodeToBytes(value)))
+}
+func (this SyncMapServerConn) parseIncrBy(input [][]byte) []byte {
+	value := decodeInt(input[2])
+	return encodeToBytes(this.IncrBy(string(input[1]), value))
+}
+
+// DBSIZE
+func (this SyncMapServerConn) DBSize() int {
+	if this.IsMasterServer() {
+		return int(this.server.keyCount)
+	} else {
+		return decodeInt(this.send(syncMapCommandDBSize))
+	}
+}
+func (this SyncMapServerConn) parseDBSize(input [][]byte) []byte {
+	return encodeToBytes(this.DBSize())
+}
+
+// RPUSH :: List に要素を追加したのち index を返す
+// NOTE: Lockをするのでトランザクション時に呼び出すのはだめ
+func (this SyncMapServerConn) rpushImpl(key string, encodedValue []byte) int {
+	this.lockKey(key)
+	elist, ok := this.loadDirect(key)
+	if !ok { // そもそも存在しなかった時は追加
+		this.storeDirect(key, [][]byte{encodedValue})
+		return 0
+	}
+	list := append(elist.([][]byte), encodedValue)
+	this.storeDirect(key, list)
+	this.unlockKey(key)
+	return len(list) - 1
+}
+func (this SyncMapServerConn) RPush(key string, value interface{}) int {
+	if this.IsMasterServer() {
+		return this.rpushImpl(key, encodeToBytes(value))
+	} else {
+		return decodeInt(this.send(syncMapCommandRPush, []byte(key), encodeToBytes(value)))
+	}
+}
+func (this SyncMapServerConn) parseRPush(input [][]byte) []byte {
+	return encodeToBytes(this.rpushImpl(string(input[1]), input[2]))
+}
+
+// LLEN: list のサイズを返す
+func (this SyncMapServerConn) LLen(key string) int {
+	if this.IsMasterServer() {
+		elist, ok := this.loadDirect(key)
+		if !ok {
+			return 0
+		}
+		return len(elist.([][]byte))
+	} else {
+		return decodeInt(this.send(syncMapCommandLLen, []byte(key)))
+	}
+}
+func (this SyncMapServerConn) parseLLen(input [][]byte) []byte {
+	return encodeToBytes(this.LLen(string(input[1])))
+}
+
+// LINDEX: 変更できるようにpointer型で受け取ること
+func (this SyncMapServerConn) LIndex(key string, index int, value interface{}) bool {
+	if this.IsMasterServer() {
+		elist, ok := this.loadDirect(key)
+		list := elist.([][]byte)
+		if !ok || index < 0 || index >= len(list) {
+			return false
+		}
+		decodeFromBytes(list[index], value)
+		return true
+	} else {
+		encoded := this.send(syncMapCommandLIndex, []byte(key), encodeToBytes(index))
+		if len(encoded) == 0 {
+			return false
+		}
+		decodeFromBytes(encoded, value)
+		return true
+	}
+}
+func (this SyncMapServerConn) parseLIndex(input [][]byte) []byte {
+	key := string(input[1])
+	index := 0
+	decodeFromBytes(input[2], &index)
+	elist, ok := this.loadDirect(key)
+	list := elist.([][]byte)
+	if !ok || index < 0 || index >= len(list) {
+		panic(nil)
+	}
+	return list[index]
+}
+
+// LSet: List を Update する
+func (this SyncMapServerConn) lsetImpl(key string, index int, encodedValue []byte) {
+	elist, ok := this.loadDirect(key)
+	list := elist.([][]byte)
+	if !ok || index < 0 || index >= len(list) {
+		panic(nil)
+	}
+	list[index] = encodedValue
+	this.storeDirect(key, list)
+}
+func (this SyncMapServerConn) LSet(key string, index int, value interface{}) {
+	if this.IsMasterServer() {
+		this.lsetImpl(key, index, encodeToBytes(value))
+	} else {
+		this.send(syncMapCommandLSet, []byte(key), encodeToBytes(index), encodeToBytes(value))
+	}
+}
+func (this SyncMapServerConn) parseLSet(input [][]byte) {
+	index := 0
+	decodeFromBytes(input[2], &index)
+	this.lsetImpl(string(input[1]), index, input[3])
+}
+
+// トランザクション
+func (this SyncMapServerConn) IsLockedKey(key string) bool {
+	if this.IsMasterServer() {
+		locked, ok := this.server.lockedMap.Load(key)
+		if !ok {
+			return false // 存在しない == ロックされていない
+		}
+		return locked.(bool)
+	} else {
+		return decodeBool(this.send(syncMapCommandIsLockedKey, []byte(key)))
+	}
+}
+func (this SyncMapServerConn) parseIsLockedKey(input [][]byte) []byte {
+	return encodeToBytes(this.IsLockedKey(string(input[1])))
+}
+// キーはソート済みを想定
+func (this SyncMapServerConn) lockKeys(keys []string) {
+	m, ok := this.server.mutexMap.Load(key)
+	if !ok {
+		// ここで作成してしまうと二つのLockが競合するので,Store時にだけ生成されるようにする
+		log.Panic("存在しないキー" + key + "へのロックが掛かりました")
+	}
+	m.(*sync.Mutex).Lock()
+	this.server.lockedMap.Store(key, true)
+}
+// キーはソート済みを想定
+func (this SyncMapServerConn) unlockKeys(key []string) {
+	m, ok := this.server.mutexMap.Load(key)
+	if !ok {
+		log.Panic("存在しないキー" + key + "へのアンロックが掛かりました")
+	}
+	this.server.lockedMap.Store(key, false)
+	m.(*sync.Mutex).Unlock()
+}
+
+// TODO: キーをソートしたりロックしたりコネクションを専有したり
+func (this SyncMapServerConn) Transaction(keys []string, f func()) (isok bool) {
+	if this.IsMasterServer() {
+		this.lockKey(keys)
+		f()
+		this.unlockKey(keys)
+	} else {
+		keysEncoded := joinStrsToBytes(keys)
+		this.send(syncMapCommandLockKey, keysEncoded)
+		f()
+		this.send(syncMapCommandUnlockKey, keysEncoded)
+	}
+}
+
+// 自作関数を使用する時用
+func DefaultSendCustomFunction(this SyncMapServerConn, buf []byte) []byte {
+	return buf // echo server
+}
+func (this SyncMapServerConn) CustomFunction(f func() []byte) []byte {
+	if this.IsMasterServer() {
+		return this.server.MySendCustomFunction(this, f())
+	} else {
+		return this.send(syncMapCommandCustom, f())
+	}
+}
+func (this SyncMapServerConn) parseCustomFunction(input [][]byte) []byte {
+	return this.CustomFunction(func() []byte { return input[1] })
+}
+
+// 全ての要素を削除する
+func (this SyncMapServerConn) FlushAll() {
+	if this.IsMasterServer() {
+		var syncMap sync.Map
+		this.SyncMap = syncMap
+		var mutexMap sync.Map
+		this.mutexMap = mutexMap
+		var lockedMap sync.Map
+		this.lockedMap = lockedMap
+		this.keyCount = 0
+		var mutex sync.Mutex
+		this.mutex = mutex
+		this.IsLocked = false
+	} else {
+		this.send(syncMapCommandFlushAll)
+	}
+}
+
+//  SyncMap で使用する関数
+func NewSyncMapServer(substanceAddress string, isMaster bool) SyncMapServer {
 	if isMaster {
 		port, _ := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
 		result := newMasterSyncMapServer(port)
@@ -327,609 +755,20 @@ func NewSyncMapServer(substanceAddress string, isMaster bool) *SyncMapServer {
 		return result
 	}
 }
-
-func (this *SyncMapServer) IsMasterServer() bool {
-	return len(this.substanceAddress) == 0
-}
-
-////////////////////////////////////////////////////////
-//            IMPLEMENTATION OF COMMANDS              //
-////////////////////////////////////////////////////////
-
-// サーバーで受け取ってコマンドに対応する関数を実行
-func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
-	ss := split(buf)
-	if len(ss) < 1 {
-		panic(nil)
-	}
-	// fmt.Println("RECIEVED:", len(buf), "Bytes")
-	switch string(ss[0]) {
-	// General Commands
-	case syncMapCommandGet:
-		key := string(ss[1])
-		value, ok := this.loadDirect(key)
-		if ok {
-			return value.([]byte)
-		}
-	case syncMapCommandSet:
-		this.storeDirect(string(ss[1]), ss[2])
-	case syncMapCommandExists:
-		return encodeToBytes(this.exitstsImpl(string(ss[1]), true, false))
-	case syncMapCommandIncrBy:
-		value := 0
-		decodeFromBytes(ss[2], &value)
-		return encodeToBytes(this.incrByImpl(string(ss[1]), value, true))
-	case syncMapCommandDel:
-		this.delImpl(string(ss[1]), true, false)
-	case syncMapCommandDBSize:
-		return encodeToBytes(this.dbSizeImpl(true, false))
-	// List Command
-	case syncMapCommandRPush:
-		return encodeToBytes(this.rpushImpl(string(ss[1]), ss[2], true, false))
-	case syncMapCommandLLen:
-		return encodeToBytes(this.llenImpl(string(ss[1]), true, false))
-	// Transaction (Lock / Unlock)
-	case syncMapCommandLockAll:
-		this.LockAll()
-	case syncMapCommandUnlockAll:
-		this.UnlockAll()
-	case syncMapCommandIsLockedAll:
-		return encodeToBytes(this.isLockedAllImpl(true))
-	case syncMapCommandLockKey:
-		this.LockKey(string(ss[1]))
-	case syncMapCommandUnlockKey:
-		this.UnlockKey(string(ss[1]))
-	case syncMapCommandIsLockedKey:
-		return encodeToBytes(this.isLockedKeyImpl(string(ss[1]), true))
-	case syncMapCommandLIndex:
-		key := string(ss[1]) // バイト列をそのまま保存するので そのまま使えない
-		index := 0
-		decodeFromBytes(ss[2], &index)
-		elist, ok := this.loadDirect(key)
-		list := elist.([][]byte)
-		if !ok || index < 0 || index >= len(list) {
-			panic(nil)
-		}
-		return list[index]
-	case syncMapCommandLSet:
-		index := 0
-		decodeFromBytes(ss[2], &index)
-		this.lsetImpl(string(ss[1]), index, ss[3], true, false)
-	// Multi Command (for N+1)
-	case syncMapCommandMGet:
-		keys := splitBytesToStrs(ss[1])
-		var result [][]byte
-		for _, key := range keys {
-			loaded, ok := this.loadDirect(key)
-			if ok {
-				result = append(result, loaded.([]byte))
-			} else {
-				result = append(result, []byte(""))
-			}
-		}
-		return join(result)
-	case syncMapCommandMSet:
-		keys := splitBytesToStrs(ss[1])
-		values := split(ss[2])
-		for i, key := range keys {
-			value := values[i]
-			this.storeDirect(key, value)
-		}
-	// Custom Command
-	case syncMapCommandCustom:
-		return this.sendCustomImpl(func() []byte { return ss[1] }, true, false)
-	case syncMapCommandFlushAll:
-		this.flushAllImpl(true, false)
-	default:
-		panic(nil)
-	}
-	return []byte("")
-}
-
-// 変更できるようにpointer型で受け取ること。
-func (this *SyncMapServer) getImpl(key string, res interface{}, forceConnection bool) bool {
-	if this.IsMasterServer() {
-		return this.loadDirectWithDecoding(key, res)
-	} else { // やっていき
-		loadedBytes := this.send(join([][]byte{
-			[]byte(syncMapCommandGet),
-			[]byte(key),
-		}), forceConnection)
-		if len(loadedBytes) == 0 {
-			return false
-		}
-		decodeFromBytes(loadedBytes, res)
-		return true
+func (this SyncMapServer) GetConn() SyncMapServerConn {
+	return SyncMapServerConn{
+		server:              *this,
+		connectionPoolIndex: NoConnectionIsSelected,
 	}
 }
-func (this *SyncMapServer) Get(key string, res interface{}) bool {
-	return this.getImpl(key, res, false)
+func (this SyncMapServerConn) IsMasterServer() bool {
+	return len(this.server.substanceAddress) == 0
 }
-func (this *SyncMapServerTransaction) Get(key string, res interface{}) bool {
-	return this.server.getImpl(key, res, true)
+func (this SyncMapServerConn) IsNowTransaction() bool {
+	return len(this.lockedKeys) > 0
 }
-
-func sbytes(s string) []byte {
-	return []byte(s)
-	// NOTE: かなり　unsafe なやりかたなので落ちるかもしれないが高速化可能
-	// return *(*[]byte)(unsafe.Pointer(&s))
-}
-
-// Masterなら直に、SlaveならTCPでつないで実行
-func (this *SyncMapServer) setImpl(key string, value interface{}, forceConnection bool) {
-	if this.IsMasterServer() {
-		this.storeDirectWithEncoding(key, value)
-	} else { // やっていき
-		this.send(join([][]byte{
-			[]byte(syncMapCommandSet),
-			sbytes(key),
-			encodeToBytes(value),
-		}), forceConnection)
-	}
-}
-func (this *SyncMapServer) Set(key string, value interface{}) {
-	this.setImpl(key, value, false)
-}
-func (this *SyncMapServerTransaction) Set(key string, value interface{}) {
-	this.server.setImpl(key, value, true)
-}
-
-// 変更できるようにpointer型で受け取ること
-// 一旦 MGetResult を経由することで、重複するキーのロードを一回のロードで済ませられる
-type MGetResult struct {
-	resultMap map[string][]byte
-}
-
-func newMGetResult() MGetResult {
-	var result MGetResult
-	result.resultMap = map[string][]byte{}
-	return result
-}
-
-func (this MGetResult) Get(key string, value interface{}) bool {
-	encoded, ok := this.resultMap[key]
-	if !ok {
-		return false
-	}
-	decodeFromBytes(encoded, value)
-	return true
-}
-func (this *SyncMapServer) mgetImpl(keys []string, forceConnection bool) MGetResult {
-	result := newMGetResult()
-	if this.IsMasterServer() {
-		for _, key := range keys {
-			encoded, ok := this.loadDirect(key)
-			if ok {
-				result.resultMap[key] = encoded.([]byte)
-			}
-		}
-	} else { // やっていき
-		recieved := this.send(join([][]byte{
-			[]byte(syncMapCommandMGet),
-			joinStrsToBytes(keys),
-		}), forceConnection)
-		encodedValues := split(recieved)
-		for i, encodedValue := range encodedValues {
-			ok := encodedValue != nil && len(encodedValue) != 0
-			if ok {
-				result.resultMap[keys[i]] = encodedValue
-			}
-		}
-	}
-	return result
-}
-
-func (this *SyncMapServer) MGet(keys []string) MGetResult {
-	return this.mgetImpl(keys, false)
-}
-func (this *SyncMapServerTransaction) MGet(keys []string) MGetResult {
-	return this.server.mgetImpl(keys, true)
-}
-
-// encodeToBytes() した配列を渡すこと。
-// Masterなら直に、SlaveならTCPでつないで実行
-// あとでDecodeすること。空なら 空。
-func (this *SyncMapServer) msetImpl(store map[string]interface{}, forceConnection bool) {
-	if this.IsMasterServer() {
-		for key, value := range store {
-			this.storeDirectWithEncoding(key, value)
-		}
-	} else { // やっていき
-		var savedValues [][]byte
-		var keys []string
-		for key, value := range store {
-			keys = append(keys, key)
-			savedValues = append(savedValues, encodeToBytes(value))
-		}
-		this.send(join([][]byte{
-			[]byte(syncMapCommandMSet),
-			joinStrsToBytes(keys),
-			join(savedValues),
-		}), forceConnection)
-	}
-}
-func (this *SyncMapServer) MSet(store map[string]interface{}) {
-	this.msetImpl(store, false)
-}
-func (this *SyncMapServerTransaction) MSet(store map[string]interface{}) {
-	this.server.msetImpl(store, true)
-}
-
-// Masterなら直に、SlaveならTCPでつないで実行
-func (this *SyncMapServer) delImpl(key string, forceDirect, forceConnection bool) {
-	if forceDirect || this.IsMasterServer() {
-		this.deleteDirect(key)
-	} else {
-		this.send(join([][]byte{
-			[]byte(syncMapCommandDel),
-			[]byte(key),
-		}), forceConnection)
-	}
-}
-func (this *SyncMapServer) Del(key string) {
-	this.delImpl(key, false, false)
-}
-func (this *SyncMapServerTransaction) Del(key string) {
-	this.server.delImpl(key, false, true)
-}
-
-// 全ての要素を削除する
-func (this *SyncMapServer) FlushAllDirect() {
-	var syncMap sync.Map
-	this.SyncMap = syncMap
-	var mutexMap sync.Map
-	this.mutexMap = mutexMap
-	var lockedMap sync.Map
-	this.lockedMap = lockedMap
-	this.KeyCount = 0
-	var mutex sync.Mutex
-	this.mutex = mutex
-	this.IsLocked = false
-}
-func (this *SyncMapServer) flushAllImpl(forceDirect, forceConnection bool) {
-	if forceDirect || this.IsMasterServer() {
-		this.FlushAllDirect()
-	} else {
-		this.send(join([][]byte{
-			[]byte(syncMapCommandFlushAll),
-		}), forceConnection)
-	}
-}
-func (this *SyncMapServer) FlushAll() {
-	this.flushAllImpl(false, false)
-}
-func (this *SyncMapServerTransaction) FlushAll() {
-	this.server.flushAllImpl(false, true)
-}
-
-// キーが存在するか確認
-func (this *SyncMapServer) exitstsImpl(key string, forceDirect, forceConnection bool) bool {
-	if forceDirect || this.IsMasterServer() {
-		_, ok := this.loadDirect(key)
-		return ok
-	} else {
-		encoded := this.send(join([][]byte{
-			[]byte(syncMapCommandExists),
-			[]byte(key),
-		}), forceConnection)
-		ok := false
-		decodeFromBytes(encoded, &ok)
-		return ok
-	}
-}
-func (this *SyncMapServer) Exists(key string) bool {
-	return this.exitstsImpl(key, false, false)
-}
-func (this *SyncMapServerTransaction) Exists(key string) bool {
-	return this.server.exitstsImpl(key, false, true)
-}
-
-// SyncMapに保存されている要素数を取得
-func (this *SyncMapServer) dbSizeImpl(forceDirect, forceConnection bool) int {
-	if forceDirect || this.IsMasterServer() {
-		return int(this.KeyCount)
-	} else {
-		encoded := this.send(join([][]byte{
-			[]byte(syncMapCommandDBSize),
-		}), forceConnection)
-		result := 0
-		decodeFromBytes(encoded, &result)
-		return result
-	}
-}
-func (this *SyncMapServer) DBSize() int {
-	return this.dbSizeImpl(false, false)
-}
-func (this *SyncMapServerTransaction) DBSize() int {
-	return this.server.dbSizeImpl(false, true)
-}
-
-// += value する
-func (this *SyncMapServer) incrByImpl(key string, value int, forceDirect bool) int {
-	if forceDirect || this.IsMasterServer() {
-		this.LockKey(key)
-		x := 0
-		this.loadDirectWithDecoding(key, &x)
-		x += value
-		this.storeDirectWithEncoding(key, x)
-		this.UnlockKey(key)
-		return x
-	} else { // やっていき
-		x := this.send(join([][]byte{
-			[]byte(syncMapCommandIncrBy),
-			[]byte(key),
-			encodeToBytes(value),
-		}), false)
-		result := 0
-		decodeFromBytes(x, &result)
-		return result
-	}
-}
-func (this *SyncMapServer) IncrBy(key string, value int) int {
-	return this.incrByImpl(key, value, false)
-}
-
-// トランザクション (キー毎 / 全体)
-func (this *SyncMapServer) isLockedAllImpl(forceDirect bool) bool {
-	if forceDirect || this.IsMasterServer() {
-		return this.IsLocked
-	} else { // やっていき
-		x := this.send(join([][]byte{
-			[]byte(syncMapCommandIsLockedAll),
-		}), false)
-		result := true
-		decodeFromBytes(x, &result)
-		return result
-	}
-}
-func (this *SyncMapServer) IsLockedAll() bool {
-	return this.isLockedAllImpl(false)
-}
-func (this *SyncMapServer) isLockedKeyImpl(key string, forceDirect bool) bool {
-	if forceDirect || this.IsMasterServer() {
-		locked, ok := this.lockedMap.Load(key)
-		if !ok {
-			return false // NOTE: 存在しない == ロックされていない
-		}
-		return locked.(bool)
-	} else { // やっていき
-		x := this.send(join([][]byte{
-			[]byte(syncMapCommandIsLockedKey),
-			[]byte(key),
-		}), false)
-		result := true
-		decodeFromBytes(x, &result)
-		return result
-	}
-}
-func (this *SyncMapServer) IsLockedKey(key string) bool {
-	return this.isLockedKeyImpl(key, false)
-}
-func (this *SyncMapServer) LockAll() {
-	this.mutex.Lock()
-	this.IsLocked = true
-}
-func (this *SyncMapServer) UnlockAll() {
-	this.IsLocked = false
-	this.mutex.Unlock()
-}
-func (this *SyncMapServer) LockKey(key string) {
-	m, ok := this.mutexMap.Load(key)
-	if !ok {
-		panic(nil)
-	}
-	m.(*sync.Mutex).Lock()
-	this.lockedMap.Store(key, true)
-}
-func (this *SyncMapServer) UnlockKey(key string) {
-	m, ok := this.mutexMap.Load(key)
-	if !ok {
-		panic(nil)
-	}
-	this.lockedMap.Store(key, false)
-	m.(*sync.Mutex).Unlock()
-}
-func (this *SyncMapServer) StartTransaction(f func(this *SyncMapServerTransaction)) {
-	if this.IsMasterServer() {
-		this.LockAll()
-	} else { // やっていき
-		this.send(join([][]byte{
-			[]byte(syncMapCommandLockAll),
-		}), false)
-	}
-	var tx SyncMapServerTransaction
-	tx.server = this
-	tx.specificKey = false
-	tx.key = ""
-	f(&tx)
-	tx.endTransaction()
-}
-func (this *SyncMapServer) StartTransactionWithKey(key string, f func(this *SyncMapServerTransaction)) {
-	if this.IsMasterServer() {
-		this.LockKey(key)
-	} else { // やっていき
-		this.send(join([][]byte{
-			[]byte(syncMapCommandLockKey),
-			[]byte(key),
-		}), false)
-	}
-	var tx SyncMapServerTransaction
-	tx.server = this
-	tx.specificKey = true
-	tx.key = key
-	f(&tx)
-	tx.endTransaction()
-}
-func (this *SyncMapServerTransaction) endTransaction() {
-	if this.server.IsMasterServer() {
-		if this.specificKey {
-			this.server.UnlockKey(this.key)
-		} else {
-			this.server.UnlockAll()
-		}
-	} else { // やっていき
-		if this.specificKey {
-			this.server.send(join([][]byte{
-				[]byte(syncMapCommandUnlockKey),
-				[]byte(this.key),
-			}), true)
-		} else {
-			this.server.send(join([][]byte{
-				[]byte(syncMapCommandUnlockAll),
-			}), true)
-		}
-	}
-}
-
-// List に要素を追加したのち index を返す
-func (this *SyncMapServer) rpushImpl(key string, value interface{}, forceDirect, forceConnection bool) int {
-	if forceDirect || this.IsMasterServer() {
-		this.LockKey(key)
-		elist, ok := this.loadDirect(key)
-		if !ok { // そもそも存在しなかった時は追加
-			this.storeDirect(key, [][]byte{encodeToBytes(value)})
-			return 0
-		}
-		list := elist.([][]byte)
-		if forceDirect {
-			list = append(list, value.([]byte))
-		} else {
-			list = append(list, encodeToBytes(value))
-		}
-		this.storeDirect(key, list)
-		this.UnlockKey(key)
-		return len(list) - 1
-	} else {
-		encoded2 := this.send(join([][]byte{
-			[]byte(syncMapCommandRPush),
-			[]byte(key),
-			encodeToBytes(value),
-		}), forceConnection)
-		x := 0
-		decodeFromBytes(encoded2, &x)
-		return x
-	}
-}
-func (this *SyncMapServer) RPush(key string, value interface{}) int {
-	return this.rpushImpl(key, value, false, false)
-}
-func (this *SyncMapServerTransaction) RPush(key string, value interface{}) int {
-	return this.server.rpushImpl(key, value, false, true)
-}
-
-// list のサイズを返す
-func (this *SyncMapServer) llenImpl(key string, forceDirect, forceConnection bool) int {
-	if forceDirect || this.IsMasterServer() {
-		elist, ok := this.loadDirect(key)
-		if !ok {
-			return 0
-		}
-		return len(elist.([][]byte))
-	} else {
-		encoded := this.send(join([][]byte{
-			[]byte(syncMapCommandLLen),
-			[]byte(key),
-		}), forceConnection)
-		x := 0
-		decodeFromBytes(encoded, &x)
-		return x
-	}
-}
-func (this *SyncMapServer) LLen(key string) int {
-	return this.llenImpl(key, false, false)
-}
-func (this *SyncMapServerTransaction) LLen(key string) int {
-	return this.server.llenImpl(key, false, true)
-}
-
-// List を　Get する / value はロード可能なようにpointerを渡すこと
-func (this *SyncMapServer) lindexImpl(key string, index int, value interface{}, forceConnection bool) bool {
-	if this.IsMasterServer() {
-		elist, ok := this.loadDirect(key)
-		list := elist.([][]byte)
-		if !ok || index < 0 || index >= len(list) {
-			return false
-		}
-		decodeFromBytes(list[index], value)
-		return true
-	} else {
-		encoded := this.send(join([][]byte{
-			[]byte(syncMapCommandLIndex),
-			[]byte(key),
-			encodeToBytes(index),
-		}), forceConnection)
-		if len(encoded) == 0 {
-			return false
-		}
-		decodeFromBytes(encoded, value)
-		return true
-	}
-}
-func (this *SyncMapServer) LIndex(key string, index int, value interface{}) bool {
-	return this.lindexImpl(key, index, value, false)
-}
-func (this *SyncMapServerTransaction) LIndex(key string, index int, value interface{}) bool {
-	return this.server.lindexImpl(key, index, value, true)
-}
-
-// List を Update する
-func (this *SyncMapServer) lsetImpl(key string, index int, value interface{}, forceDirect, forceConnection bool) {
-	if forceDirect || this.IsMasterServer() {
-		elist, ok := this.loadDirect(key)
-		if !ok || index < 0 {
-			panic(nil)
-		}
-		list := elist.([][]byte)
-		if index >= len(list) {
-			panic(nil)
-		}
-		if forceDirect {
-			list[index] = value.([]byte)
-		} else {
-			list[index] = encodeToBytes(value)
-		}
-		this.storeDirect(key, list)
-	} else {
-		this.send(join([][]byte{
-			[]byte(syncMapCommandLSet),
-			[]byte(key),
-			encodeToBytes(index),
-			encodeToBytes(value),
-		}), forceConnection)
-	}
-}
-func (this *SyncMapServer) LSet(key string, index int, value interface{}) {
-	this.lsetImpl(key, index, value, false, false)
-}
-func (this *SyncMapServerTransaction) LSet(key string, index int, value interface{}) {
-	this.server.lsetImpl(key, index, value, false, true)
-}
-
-// 自作関数を使用する時用
-func DefaultSendCustomFunction(this *SyncMapServer, buf []byte) []byte {
-	return buf // echo server
-}
-func (this *SyncMapServer) sendCustomImpl(f func() []byte, forceDirect, forceConnect bool) []byte {
-	if forceDirect || this.IsMasterServer() {
-		return this.MySendCustomFunction(this, f())
-	} else {
-		return this.send(join([][]byte{
-			[]byte(syncMapCommandCustom),
-			f(),
-		}), forceConnect)
-	}
-}
-func (this *SyncMapServer) SendCustom(f func() []byte) []byte {
-	return this.sendCustomImpl(f, false, false)
-}
-func (this *SyncMapServerTransaction) SendCustom(f func() []byte) []byte {
-	return this.server.sendCustomImpl(f, false, true)
-}
-
-//  SyncMap で使用する関数
-
-func newMasterSyncMapServer(port int) *SyncMapServer {
-	this := &SyncMapServer{}
+func newMasterSyncMapServer(port int) SyncMapServer {
+	this := SyncMapServer{}
 	this.substanceAddress = ""
 	this.masterPort = port
 	go func() {
@@ -960,22 +799,22 @@ func newMasterSyncMapServer(port int) *SyncMapServer {
 	// 起動終了までちょっと時間がかかるかもしれないので待機しておく
 	time.Sleep(10 * time.Millisecond)
 	// 何も設定しなければecho
-	this.MySendCustomFunction = func(this *SyncMapServer, buf []byte) []byte { return buf }
+	this.MySendCustomFunction = func(this SyncMapServer, buf []byte) []byte { return buf }
 	// バックアップファイルが見つかればそれを読み込む
 	this.readFile()
 	// バックアッププロセスを開始する
 	this.startBackUpProcess()
 	return this
 }
-func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
-	this := &SyncMapServer{}
+func newSlaveSyncMapServer(substanceAddress string) SyncMapServer {
+	this := SyncMapServer{}
 	this.substanceAddress = substanceAddress
 	port, err := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
 	if err != nil {
 		panic(err)
 	}
 	this.masterPort = port
-	this.MySendCustomFunction = func(this *SyncMapServer, buf []byte) []byte { return buf }
+	this.MySendCustomFunction = func(this SyncMapServer, buf []byte) []byte { return buf }
 	// WARN: Transaction時は強引に作成するので想定数よりも増えるので多めに確保
 	this.connectionPool = make([]*net.TCPConn, maxSyncMapServerConnectionNum*10)
 	this.connectionPoolStatus = make([]int, maxSyncMapServerConnectionNum*10)
@@ -987,10 +826,10 @@ func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	// Redisがそういう仕組みなのでこちらもそのようにしておく
 	return this
 }
-func (this *SyncMapServer) getPath() string {
+func (this SyncMapServer) getPath() string {
 	return SyncMapBackUpPath + strconv.Itoa(this.masterPort) + ".sm"
 }
-func (this *SyncMapServer) writeFile() {
+func (this SyncMapServer) writeFile() {
 	if !this.IsMasterServer() {
 		return
 	}
@@ -1018,7 +857,7 @@ func (this *SyncMapServer) writeFile() {
 	defer file.Close()
 	file.Write(encodeToBytes(result))
 }
-func (this *SyncMapServer) readFile() {
+func (this SyncMapServer) readFile() {
 	if !this.IsMasterServer() {
 		return
 	}
@@ -1043,7 +882,7 @@ func (this *SyncMapServer) readFile() {
 		}
 	}
 }
-func (this *SyncMapServer) startBackUpProcess() {
+func (this SyncMapServer) startBackUpProcess() {
 	go func() {
 		time.Sleep(time.Duration(DefaultBackUpTimeSecond) * time.Second)
 		this.writeFile()
@@ -1051,55 +890,59 @@ func (this *SyncMapServer) startBackUpProcess() {
 }
 
 // 自身の SyncMapからLoad / 変更できるようにpointer型で受け取ること
-func (this *SyncMapServer) loadDirectWithDecoding(key string, res interface{}) bool {
+func (this SyncMapServerConn) loadDirectWithDecoding(key string, res interface{}) bool {
 	value, ok := this.loadDirect(key)
 	if ok {
 		decodeFromBytes(value.([]byte), res)
 	}
 	return ok
 }
-func (this *SyncMapServer) storeDirectWithEncoding(key string, value interface{}) {
+func (this SyncMapServerConn) storeDirectWithEncoding(key string, value interface{}) {
 	encoded := encodeToBytes(value)
 	this.storeDirect(key, encoded)
 }
 
 // 集約させておくことで後で便利にする
-func (this *SyncMapServer) loadDirect(key string) (interface{}, bool) {
-	return this.SyncMap.Load(key)
+func (this SyncMapServerConn) loadDirect(key string) (interface{}, bool) {
+	x, ok := this.server.SyncMap.Load(key)
+	return x, ok
 }
 
 // 自身の SyncMapにStore. value は []byte か [][]byte 型
-func (this *SyncMapServer) storeDirect(key string, value interface{}) {
-	_, exists := this.SyncMap.Load(key)
+func (this SyncMapServerConn) storeDirect(key string, value interface{}) {
+	_, exists := this.server.SyncMap.Load(key)
 	if !exists {
 		var m sync.Mutex
-		this.mutexMap.Store(key, &m)
-		this.lockedMap.Store(key, false)
-		atomic.AddInt32(&this.KeyCount, 1)
+		this.server.mutexMap.Store(key, &m)
+		this.server.lockedMap.Store(key, false)
+		atomic.AddInt32(&this.server.keyCount, 1)
 	}
-	this.SyncMap.Store(key, value)
+	this.server.SyncMap.Store(key, value)
 }
-func (this *SyncMapServer) deleteDirect(key string) {
-	_, exists := this.SyncMap.Load(key)
+func (this SyncMapServerConn) deleteDirect(key string) {
+	_, exists := this.server.SyncMap.Load(key)
 	if !exists {
 		return
 	}
-	this.SyncMap.Delete(key)
-	this.mutexMap.Delete(key)
-	this.lockedMap.Delete(key)
-	atomic.AddInt32(&this.KeyCount, -1)
+	this.server.SyncMap.Delete(key)
+	this.server.mutexMap.Delete(key)
+	this.server.lockedMap.Delete(key)
+	atomic.AddInt32(&this.server.keyCount, -1)
 }
 
 // 生のbyteを送信
-func (this *SyncMapServer) send(packet []byte, force bool) []byte {
+func (this SyncMapServerConn) send(command string, packet ...[]byte) []byte {
+	encoded := join([][]byte{
+		[]byte(command),
+		packet,
+	})
 	if this.IsMasterServer() {
-		return this.interpretWrapFunction(packet)
+		return this.interpretWrapFunction(encoded)
 	} else {
-		return this.sendBySlave(packet, force)
+		return this.sendBySlave(encoded)
 	}
 }
-
-func (this *SyncMapServer) sendBySlave(packet []byte, force bool) []byte {
+func (this SyncMapServerConn) sendBySlave(packet []byte) []byte {
 	if force { // TODO:
 		log.Panic("Not Implementent Transaction")
 	}
