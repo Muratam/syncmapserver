@@ -7,14 +7,16 @@
 - 同梱のRedisWrapperも KeyValueStore interface を持っているので一瞬で切り替えることが可能、もしものときにも安心。
 
 
-## Redisよりも 速い
-- On Memory なのでそもそも速い
-  - 30秒毎にバックアップファイルを作成してくれるのでレギュレーション的にも安心！
-    -  読み込み時にバックアップファイルがあればそれを読み込む
+## Redis並の速度が出る
 - Goアプリ上で動かすので速い
-  - Redisだと同じサーバーでもRedisへTCPで通信する必要があるが、その必要がない。
+  - Redisだと同じサーバーでもRedisへTCPで通信する必要があるが、その必要がないところが特徴。
+  - 例えば 3台 の場合、単純計算で 1.5倍速！
+- On Memory なので Redis並の速度が出る
+  - 30秒毎にバックアップファイルを作成してくれるのでレギュレーション的にも安心！
+  -  読み込み時にバックアップファイルがあればそれを読み込む
 - すべてのデータを []byte で保存するため速い
   - Goアプリからはinterface{}で型の変換がすぐにできる。
+  - ただしこれは RedisWrapper の方でも同じなので速度に差は無い
 - 大量のデータの初期化が速い
   - Redisは一括で送信しないと莫大な時間がかかるが、こちらはMasterサーバーで初期化することでオーバーヘッドなしに初期化できる。
 
@@ -33,12 +35,12 @@
   - TCPConnに変えるとメソッドがもっと生える
 1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
 1. TODO: さらにさらにGoのコードにSQLを変換したい。
-1. TODO: 一つのキーに保存された list の 全てを一括取得も実装しておきたい
-1. TODO: 再起動試験に弱そう
-1. join / split はもっと高速化できそう(bytes.Buffer?)
-1. KeepAlive Time は大丈夫か？ (SetKeepAlive / SetKeepAlivePeriod)
-- METHOD:
+1. TODO:
+  - 一つのキーに保存された list の 全てを一括取得も実装しておきたい
   - 本家は RPush が一度に複数送信できるっぽい
+1. TODO: codegen が対応できないデータ型が多い
+1. 別のDBがあるといちいち別のやつを建てる必要があるが、それは損
+
 # ISUCONでの使用時のヒント
 - https://github.com/Muratam/isucon9q/blob/nouser/postapi.go
   - DBからのSQLでの読み込み は initializeUsersDB()
@@ -49,27 +51,26 @@
 
 # ベンチマークと動作テスト
 
-syncmap / rediswrapper の速度の比較と動作テスト keyvaluestore.go でしています
+- syncmap / rediswrapper の速度の比較と動作テスト keyvaluestore.go でしています
+- User struct を作り、それをむちゃくちゃな回数 Get / Set しまくるコード
 
 ```
--------  main.BenchMGetMSetUser4000  x  1  -------
-smMaster : 292 ms
-smSlave  : 327 ms
-redis    : 308 ms
--------  main.BenchGetSetUser  x  4000  -------
-smMaster : 305 ms
-smSlave  : 2164 ms
-redis    : 852 ms
+codegen + single
+  smMaster : 21 ms
+  smSlave  : 713 ms
+  redis    : 1074 ms
+codegen + parallel  (50並列)
+  smMaster : 17 ms
+  smSlave  : 317 ms
+  redis    : 317 ms
+gob + parallel  (50並列)
+  smMaster : 194 ms
+  smSlave  : 472 ms
+  redis    : 515 ms
 ```
 
-この結果を見ると分かること
-
--  Masterサーバーの操作は速い。オーバーヘッドがないから当然。
-- エンコード/デコードにはそこまで時間がかかっていない。 MGet/MSetで莫大な量を変換しているがそこまで差がでていないことから
-- Slave-MasterへのTCPがクソ重い。ぐお〜〜〜〜〜
-  - コネクションプール形式にできるんじゃね？
-- 詳細
-  - 300ms のうちデータの生成にかかるのが150msほど。これは無視して良い。
-  - 150ms のうち殆どがEncode/Decodeにかかる時間。
-  - gencodeを使うとこの時間を1/10にできる。あとはTCPを倒すだけ。
-    - `gencode go -schema main.schema -package main`
+- Masterサーバーの操作は速い。オーバーヘッドがないから当然。
+- エンコード・デコードにかなり時間がかかる。可能なら手間だが codegen を使うべき。
+- 並列にすると速い。 Redis の速度と Slave の速度はほぼ同じになる。
+  - これは予想通り。SyncMapServerの良点は1台分TCPしなくてよいところなので
+- NOTE: 並列数が増えると現在自動ではスケールしない。100並列くらいならよいがもっとくると大変かも。

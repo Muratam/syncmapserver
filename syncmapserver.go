@@ -1142,6 +1142,7 @@ func (this *SyncMapServer) sendBySlave(packet []byte, force bool) []byte {
 			this.connectionPoolStatus[poolIndex] = ConnectionPoolStatusDisconnected
 			return this.sendBySlave(packet, force)
 		}
+		// NOTE: できるなら永遠に接続したい
 		newConn.SetKeepAlive(true)
 		// newConn.SetReadBuffer(65536)
 		// newConn.SetWriteBuffer(65536)

@@ -366,7 +366,7 @@ var names = []string{"smMaster", "smSlave ", "redis   "}
 
 func TestTransaction(store KeyValueStore) {
 	// とりあえず IncrByのみ
-	Execute(10000, true, func(i int) {
+	Execute(10000, false, func(i int) {
 		key := keys4000[i%4000]
 		preValue := localUserMap4000[key]
 		store.Set(key, preValue)
