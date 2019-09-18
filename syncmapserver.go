@@ -21,7 +21,8 @@ import (
 // NOTE: package syncmapserver を main とかに変える
 // NOTE: 環境変数 REDIS_HOST に 12.34.56.78 などのIPアドレスを入れる
 // NOTE: Redis ラッパーも書くが、ISUCON中はこちらだけ使うことで高速に
-const maxSyncMapServerConnectionNum = 16
+// NOTE: 同時にリクエストされるGoroutine の数が maxSyncMapServerConnectionNum に比べて多いと性能が落ちる。ものすごい多いと peer する
+const maxSyncMapServerConnectionNum = 100           // TODO: 自動でスケールさせたい
 const defaultReadBufferSize = 8192                  // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
 const RedisHostPrivateIPAddress = "192.168.111.111" // ここで指定したサーバーに
 // ` NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
@@ -584,7 +585,6 @@ func (this *SyncMapServer) FlushAllDirect() {
 	var mutex sync.Mutex
 	this.mutex = mutex
 	this.IsLocked = false
-	// WARN: 接続しているコネクションは再設定したほうがよい？
 }
 func (this *SyncMapServer) flushAllImpl(forceDirect, forceConnection bool) {
 	if forceDirect || this.IsMasterServer() {
@@ -1099,23 +1099,32 @@ func (this *SyncMapServer) send(packet []byte, force bool) []byte {
 	}
 }
 
-// 仮の実装。全てが同じくらいの重さとした場合の理論値を出す
-// -> スケールしてそう
-var xxxMutexes = make([]sync.Mutex, maxSyncMapServerConnectionNum)
-var xxxSum int32 = 0
-
 func (this *SyncMapServer) sendBySlave(packet []byte, force bool) []byte {
 	if force { // TODO:
 		log.Panic("Not Implementent Transaction")
 	}
-	// モデルとしては重いコネクションと軽いコネクションがあるはずなので。
-	// 均等にするのではなく軽いやつは軽いやつでどんどんやってもらいたい
-	// Lock()するので1台しか使わない実装 (速度が同じくらい出てほしいが、 findRunnableが遅いのでたいへん)
-	// ゴルーチン生成コストは一瞬だが、 Lock() 待ちが多すぎて時間がかかっている
-	poolIndex := atomic.AddInt32(&xxxSum, 1) % maxSyncMapServerConnectionNum
-	xxxMutexes[poolIndex].Lock()
-	// this.connectionPoolEmptyIndexStackMutex.Lock()
-	// poolIndex := this.connectionPoolEmptyIndexStack.Pop().(int)
+	findEmptyConnection := func() int {
+		sleep := func() {
+			time.Sleep(500 * time.Nanosecond)
+		}
+		for {
+			// Lock とかするまえにそもそも 0 なら望みがない
+			if this.connectionPoolEmptyIndexStack.Len() == 0 {
+				sleep()
+				continue
+			}
+			this.connectionPoolEmptyIndexStackMutex.Lock()
+			if this.connectionPoolEmptyIndexStack.Len() == 0 {
+				this.connectionPoolEmptyIndexStackMutex.Unlock()
+				sleep()
+				continue
+			}
+			result := this.connectionPoolEmptyIndexStack.Pop().(int)
+			this.connectionPoolEmptyIndexStackMutex.Unlock()
+			return result
+		}
+	}
+	poolIndex := findEmptyConnection()
 	poolStatus := this.connectionPoolStatus[poolIndex]
 	conn := this.connectionPool[poolIndex]
 	if poolStatus == ConnectionPoolStatusDisconnected {
@@ -1131,8 +1140,6 @@ func (this *SyncMapServer) sendBySlave(packet []byte, force bool) []byte {
 			}
 			time.Sleep(1 * time.Millisecond)
 			this.connectionPoolStatus[poolIndex] = ConnectionPoolStatusDisconnected
-			xxxMutexes[poolIndex].Unlock()
-			// this.connectionPoolEmptyIndexStackMutex.Unlock()
 			return this.sendBySlave(packet, force)
 		}
 		newConn.SetKeepAlive(true)
@@ -1144,8 +1151,8 @@ func (this *SyncMapServer) sendBySlave(packet []byte, force bool) []byte {
 	result := readAll(conn)
 	this.connectionPool[poolIndex] = conn
 	this.connectionPoolStatus[poolIndex] = ConnectionPoolStatusEmpty
-	// this.connectionPoolEmptyIndexStack.Push(poolIndex)
-	xxxMutexes[poolIndex].Unlock()
-	// this.connectionPoolEmptyIndexStackMutex.Unlock()
+	this.connectionPoolEmptyIndexStackMutex.Lock()
+	this.connectionPoolEmptyIndexStack.Push(poolIndex)
+	this.connectionPoolEmptyIndexStackMutex.Unlock()
 	return result
 }

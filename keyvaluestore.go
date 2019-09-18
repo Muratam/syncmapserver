@@ -70,7 +70,7 @@ func randUser() User {
 }
 func Execute(times int, isParallel bool, f func(i int)) {
 	if isParallel {
-		maxGoroutineNum := maxSyncMapServerConnectionNum
+		maxGoroutineNum := 50
 		var wg sync.WaitGroup
 		// GoRoutine の生成コストはかなり高いので、現実的な状況に合わせる
 		// 10000件同時接続なんてことはありえないはずなので
