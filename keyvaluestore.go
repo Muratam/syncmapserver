@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -64,6 +65,23 @@ func randUser() User {
 		// NumSellItems: random(),
 		// LastBump:     time.Now().Truncate(time.Second),
 		// CreatedAt:    time.Now().Truncate(time.Second),
+	}
+}
+func Execute(times int, isParallel bool, f func()) {
+	if isParallel {
+		var wg sync.WaitGroup
+		for i := 0; i < times; i++ {
+			wg.Add(1)
+			go func() {
+				f()
+				wg.Done()
+			}()
+		}
+		wg.Wait()
+	} else {
+		for i := 0; i < times; i++ {
+			f()
+		}
 	}
 }
 
@@ -319,27 +337,37 @@ var redisWrap KeyValueStore = NewRedisWrapper("127.0.0.1:6379")
 var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
 var names = []string{"smMaster", "smSlave ", "redis   "}
 
-// var stores = []KeyValueStore{smSlave}
-// var names = []string{"smSlave"}
+// var stores = []KeyValueStore{smMaster, redisWrap}
+// var names = []string{"smMaster", "redis   "}
+
+func TestTransaction(store KeyValueStore) {
+	// とりあえず IncrByのみ
+	store.Set("a", 0)
+	Execute(1000, false, func() {
+		store.IncrBy("a", 1)
+	})
+	fmt.Println(store.IncrBy("a", 0))
+}
 
 func main() {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	t := 10
-	Test3(TestGetSetInt, t)
-	Test3(TestGetSetUser, t)
-	Test3(TestIncrBy, t)
-	Test3(TestKeyCount, t)
-	Test3(TestMGetMSetString, 1)
-	Test3(TestMGetMSetUser, 1)
-	Test3(TestMGetMSetInt, 1)
-	TestMasterSlaveInterpret()
-	fmt.Println("-----------BENCH----------")
-	InitForBenchMGetMSetUser4000()
-	for i := 0; i < 1; i++ {
-		Test3(BenchMGetMSetStr4000, 3)
-		Test3(BenchMGetMSetUser4000, 1)
-		Test3(BenchGetSetUser, 4000)
-	}
+	Test3(TestTransaction, 1)
+	// t := 10
+	// Test3(TestGetSetInt, t)
+	// Test3(TestGetSetUser, t)
+	// Test3(TestIncrBy, t)
+	// Test3(TestKeyCount, t)
+	// Test3(TestMGetMSetString, 1)
+	// Test3(TestMGetMSetUser, 1)
+	// Test3(TestMGetMSetInt, 1)
+	// TestMasterSlaveInterpret()
+	// fmt.Println("-----------BENCH----------")
+	// InitForBenchMGetMSetUser4000()
+	// for i := 0; i < 1; i++ {
+	// 	Test3(BenchMGetMSetStr4000, 3)
+	// 	Test3(BenchMGetMSetUser4000, 1)
+	// 	Test3(BenchGetSetUser, 4000)
+	// }
 }

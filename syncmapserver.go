@@ -47,17 +47,21 @@ func GetMasterServerAddress() string {
 
 // SyncMapServer
 type SyncMapServer struct {
-	SyncMap              sync.Map // string -> (byte[] | byte[][])
-	KeyCount             MutexInt
-	substanceAddress     string
-	masterPort           int
-	mutex                sync.Mutex
-	IsLocked             bool
-	mutexMap             sync.Map // string -> sync.Mutex
-	lockedMap            sync.Map // string -> bool
+	SyncMap   sync.Map // string -> (byte[] | byte[][])
+	mutexMap  sync.Map // string -> sync.Mutex
+	lockedMap sync.Map // string -> bool
+	KeyCount  MutexInt
+	// 接続情報
+	substanceAddress string
+	masterPort       int
+	// コネクションはプールして再利用する
 	connectionPool       []net.Conn
 	connectionPoolStatus []MutexInt
+	// 関数をカスタマイズする用
 	MySendCustomFunction func(this *SyncMapServer, buf []byte) []byte
+	// 全体としてのロック用
+	mutex    sync.Mutex
+	IsLocked bool
 }
 
 const ConnectionPoolStatusDisconnected = 0 // 未接続の状態
