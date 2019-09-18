@@ -320,26 +320,26 @@ var redisWrap KeyValueStore = NewRedisWrapper("127.0.0.1:6379")
 var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
 var names = []string{"smMaster", "smSlave ", "redis   "}
 
-// var stores = []KeyValueStore{smMaster}
-// var names = []string{"smMaster"}
+// var stores = []KeyValueStore{smSlave}
+// var names = []string{"smSlave"}
 
 func main() {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 	// time.Sleep(3000 * time.Millisecond)
-	t := 10
-	Test3(TestGetSetInt, t)
-	Test3(TestGetSetUser, t)
-	Test3(TestIncrBy, t)
-	Test3(TestKeyCount, t)
-	Test3(TestMGetMSetString, 1)
-	Test3(TestMGetMSetUser, 1)
-	Test3(TestMGetMSetInt, 1)
-	TestMasterSlaveInterpret()
+	// t := 10
+	// Test3(TestGetSetInt, t)
+	// Test3(TestGetSetUser, t)
+	// Test3(TestIncrBy, t)
+	// Test3(TestKeyCount, t)
+	// Test3(TestMGetMSetString, 1)
+	// Test3(TestMGetMSetUser, 1)
+	// Test3(TestMGetMSetInt, 1)
+	// TestMasterSlaveInterpret()
 	fmt.Println("-----------BENCH----------")
 	InitForBenchMGetMSetUser4000()
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 1; i++ {
 		Test3(BenchMGetMSetStr10000, 1)
 		Test3(BenchMGetMSetUser4000, 1)
 	}

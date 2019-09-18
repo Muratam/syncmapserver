@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"math/rand"
 	"net"
 	"os"
 	"strconv"
@@ -54,6 +53,7 @@ type SyncMapServer struct {
 	IsLocked             bool
 	mutexMap             sync.Map // string -> sync.Mutex
 	lockedMap            sync.Map // string -> bool
+	FirstConn            net.Conn
 	MySendCustomFunction func(this *SyncMapServer, buf []byte) []byte
 }
 type SyncMapServerTransaction struct {
@@ -116,6 +116,12 @@ func format32bit(input int) []byte {
 		byte((input & 0xff000000) >> 24),
 	}
 }
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 func readAll(conn net.Conn) []byte {
 	contentLen := 0
 	if true {
@@ -123,8 +129,9 @@ func readAll(conn net.Conn) []byte {
 		readBufNum, err := conn.Read(buf)
 		if readBufNum != 4 {
 			if readBufNum == 0 {
-				// WARN
-				return readAll(conn)
+				return []byte{}
+				// // WARN:
+				// return readAll(conn)
 			} else {
 				// WARN
 				log.Panic("too short buf : ", readBufNum)
@@ -142,7 +149,8 @@ func readAll(conn net.Conn) []byte {
 	var bufAll []byte
 	currentReadLen := 0
 	for currentReadLen < contentLen {
-		buf := make([]byte, readMax)
+		readLen := min(readMax, contentLen-currentReadLen)
+		buf := make([]byte, readLen)
 		readBufNum, err := conn.Read(buf)
 		if err != nil {
 			if err == io.EOF {
@@ -921,8 +929,10 @@ func newMasterSyncMapServer(port int) *SyncMapServer {
 				continue
 			}
 			go func() {
-				writeAll(conn, this.interpretWrapFunction(readAll(conn)))
-				conn.Close()
+				for {
+					writeAll(conn, this.interpretWrapFunction(readAll(conn)))
+				}
+				// conn.Close()
 			}()
 		}
 	}()
@@ -945,6 +955,8 @@ func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	}
 	this.masterPort = port
 	this.MySendCustomFunction = func(this *SyncMapServer, buf []byte) []byte { return buf }
+	conn, err := net.Dial("tcp", this.substanceAddress)
+	this.FirstConn = conn
 	return this
 }
 func (this *SyncMapServer) getPath() string {
@@ -1059,26 +1071,28 @@ func (this *SyncMapServer) send(f func() []byte, force bool) []byte {
 	}
 }
 func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
-	if !force {
-		for this.connectNum.Get() > maxSyncMapServerConnectionNum {
-			time.Sleep(time.Duration(100+rand.Intn(400)) * time.Nanosecond)
-		}
-	}
-	this.connectNum.Inc()
-	conn, err := net.Dial("tcp", this.substanceAddress)
-	if err != nil {
-		fmt.Println("Client", this.connectNum.Get(), err)
-		if conn != nil {
-			conn.Close()
-		}
-		time.Sleep(1 * time.Millisecond)
-		this.connectNum.Dec()
-		return this.sendBySlave(f, force)
-	}
-	writeAll(conn, f())
-	result := readAll(conn)
-	conn.Close()
-	this.connectNum.Dec()
+	// if !force {
+	// 	for this.connectNum.Get() > maxSyncMapServerConnectionNum {
+	// 		time.Sleep(time.Duration(100+rand.Intn(400)) * time.Nanosecond)
+	// 	}
+	// }
+	// this.connectNum.Inc()
+	// conn, err := net.Dial("tcp", this.substanceAddress)
+	// if err != nil {
+	// 	fmt.Println("Client", this.connectNum.Get(), err)
+	// 	if conn != nil {
+	// 		conn.Close()
+	// 	}
+	// 	time.Sleep(1 * time.Millisecond)
+	// 	this.connectNum.Dec()
+	// 	return this.sendBySlave(f, force)
+	// }
+	// writeAll(conn, f())
+	// result := readAll(conn)
+	// conn.Close()
+	// this.connectNum.Dec()
+	writeAll(this.FirstConn, f())
+	result := readAll(this.FirstConn)
 	return result
 }
 
