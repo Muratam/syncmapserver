@@ -29,9 +29,14 @@
 
 
 # やるだけ
+1. 複数のコネクション / トランザクションに対応。(現在は一度接続したら離れないので)
+  - TCPConnに変えるとメソッドがもっと生える
 1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
+1. TODO: さらにさらにGoのコードにSQLを変換したい。
 1. TODO: 一つのキーに保存された list の 全てを一括取得も実装しておきたい
-1. join / split はもっと高速化できそう(EncodeAt/DecodeByをちゃんとjoin/splitに置き換える)
+1. TODO: 再起動試験に弱そう
+1. join / split はもっと高速化できそう(bytes.Buffer?)
+1. KeepAlive Time は大丈夫か？ (SetKeepAlive / SetKeepAlivePeriod)
 - METHOD:
   - 本家は RPush が一度に複数送信できるっぽい
 # ISUCONでの使用時のヒント
@@ -39,6 +44,7 @@
   - DBからのSQLでの読み込み は initializeUsersDB()
   - 特定のキーのみのロック(+1人目のトランザクションが成功したら終了) は postBuy()
   - 要求があってから初めて接続を開始するので複数台でも起動順序は問われない。
+
 
 
 # ベンチマークと動作テスト

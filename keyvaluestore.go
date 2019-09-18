@@ -5,10 +5,12 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+
 	_ "net/http/pprof"
 	"reflect"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -50,7 +52,7 @@ func random() int {
 	return rand.Intn(100)
 }
 func randStr() string {
-	result := ""
+	result := "あいうえおかきくけこ"
 	for i := 0; i < 100; i++ {
 		result += strconv.Itoa(random())
 	}
@@ -64,6 +66,29 @@ func randUser() User {
 		// NumSellItems: random(),
 		// LastBump:     time.Now().Truncate(time.Second),
 		// CreatedAt:    time.Now().Truncate(time.Second),
+	}
+}
+func Execute(times int, isParallel bool, f func(i int)) {
+	if isParallel {
+		maxGoroutineNum := 50
+		var wg sync.WaitGroup
+		// GoRoutine の生成コストはかなり高いので、現実的な状況に合わせる
+		// 10000件同時接続なんてことはありえないはずなので
+		for i := 0; i < maxGoroutineNum; i++ {
+			j := i
+			wg.Add(1)
+			go func() {
+				for k := 0; k < times/maxGoroutineNum; k++ {
+					f(k*maxGoroutineNum + j)
+				}
+				wg.Done()
+			}()
+		}
+		wg.Wait()
+	} else {
+		for i := 0; i < times; i++ {
+			f(i)
+		}
 	}
 }
 
@@ -266,16 +291,14 @@ func BenchMGetMSetUser4000(store KeyValueStore) {
 		assert(proValue.ID == preValue.(User).ID)
 	}
 }
-func BenchMGetMSetStr10000(store KeyValueStore) {
-	var keys []string
+func BenchMGetMSetStr4000(store KeyValueStore) {
 	localMap := map[string]interface{}{}
-	for i := 0; i < 10000; i++ {
-		key := randStr()
-		localMap[key] = randStr()
-		keys = append(keys, key)
+	for i := 0; i < 4000; i++ {
+		key := keys4000[i]
+		localMap[key] = keys4000[i]
 	}
 	store.MSet(localMap)
-	mgetResult := store.MGet(keys)
+	mgetResult := store.MGet(keys4000)
 	for key, preValue := range localMap {
 		var proValue string
 		mgetResult.Get(key, &proValue)
@@ -297,8 +320,9 @@ func BenchGetSetUser(store KeyValueStore) {
 // List Push の速度 (use ptr ?)
 // Lock を解除したい(RPush / LSet)
 // Transactionをチェックしたい
+// go func を可能に
 
-func Test3(f func(store KeyValueStore), times int) {
+func Test3(f func(store KeyValueStore), times int) (milliSecs []int64) {
 	rand.Seed(time.Now().UnixNano())
 	fmt.Println("------- ", runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name(), " x ", times, " -------")
 	for i, store := range stores {
@@ -308,7 +332,20 @@ func Test3(f func(store KeyValueStore), times int) {
 			f(store)
 		}
 		duration := time.Now().Sub(start)
-		fmt.Println(names[i], ":", int64(duration/time.Millisecond), "ms")
+		milliSecs = append(milliSecs, int64(duration/time.Millisecond))
+		fmt.Println(names[i], ":", milliSecs[i], "ms")
+	}
+	return milliSecs
+}
+func TestAverage3(f func(store KeyValueStore), times int) {
+	milliSecs := make([]int64, len(stores))
+	for n := 1; n < times; n++ {
+		resMilliSecs := Test3(TestTransaction, 1)
+		fmt.Println("AVERAGE:")
+		for i := 0; i < len(milliSecs); i++ {
+			milliSecs[i] += resMilliSecs[i]
+			fmt.Println("  ", names[i], ":", milliSecs[i]/int64(n), "ms")
+		}
 	}
 }
 
@@ -320,14 +357,32 @@ var redisWrap KeyValueStore = NewRedisWrapper("127.0.0.1:6379")
 var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
 var names = []string{"smMaster", "smSlave ", "redis   "}
 
+// var stores = []KeyValueStore{smMaster, redisWrap}
+// var names = []string{"smMaster", "redis   "}
+// var stores = []KeyValueStore{smSlave}
+// var names = []string{"smSlave "}
 // var stores = []KeyValueStore{smMaster}
 // var names = []string{"smMaster"}
+
+func TestTransaction(store KeyValueStore) {
+	// とりあえず IncrByのみ
+	Execute(10000, true, func(i int) {
+		key := keys4000[i%4000]
+		preValue := localUserMap4000[key]
+		store.Set(key, preValue)
+		proValue := User{}
+		store.Get(key, &proValue)
+		assert(preValue == proValue)
+		// store.IncrBy("a", 1) // 都合上Redisのほうが速い
+	})
+	// fmt.Println(store.IncrBy("a", 0))
+}
 
 func main() {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	// time.Sleep(3000 * time.Millisecond)
+	InitForBenchMGetMSetUser4000()
 	t := 10
 	Test3(TestGetSetInt, t)
 	Test3(TestGetSetUser, t)
@@ -338,10 +393,11 @@ func main() {
 	Test3(TestMGetMSetInt, 1)
 	TestMasterSlaveInterpret()
 	fmt.Println("-----------BENCH----------")
-	InitForBenchMGetMSetUser4000()
-	for i := 0; i < 2; i++ {
-		Test3(BenchMGetMSetStr10000, 1)
+	for i := 0; i < 1; i++ {
+		Test3(BenchMGetMSetStr4000, 3)
 		Test3(BenchMGetMSetUser4000, 1)
+		Test3(BenchGetSetUser, 4000)
 	}
-	Test3(BenchGetSetUser, 4000)
+	TestAverage3(TestTransaction, 1000)
+
 }
