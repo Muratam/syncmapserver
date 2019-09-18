@@ -657,12 +657,12 @@ func (this *SyncMapServerTransaction) DBSize() int {
 // += value する
 func (this *SyncMapServer) incrByImpl(key string, value int, forceDirect bool) int {
 	if forceDirect || this.IsMasterServer() {
-		this.LockAll()
+		this.LockKey(key)
 		x := 0
 		this.loadDirectWithDecoding(key, &x)
 		x += value
 		this.storeDirectWithEncoding(key, x)
-		this.UnlockAll()
+		this.UnlockKey(key)
 		return x
 	} else { // やっていき
 		x := this.send(func() []byte {

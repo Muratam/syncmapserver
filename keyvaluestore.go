@@ -67,20 +67,21 @@ func randUser() User {
 		// CreatedAt:    time.Now().Truncate(time.Second),
 	}
 }
-func Execute(times int, isParallel bool, f func()) {
+func Execute(times int, isParallel bool, f func(i int)) {
 	if isParallel {
 		var wg sync.WaitGroup
 		for i := 0; i < times; i++ {
+			j := i
 			wg.Add(1)
 			go func() {
-				f()
+				f(j)
 				wg.Done()
 			}()
 		}
 		wg.Wait()
 	} else {
 		for i := 0; i < times; i++ {
-			f()
+			f(i)
 		}
 	}
 }
@@ -344,11 +345,14 @@ var names = []string{"smMaster", "smSlave ", "redis   "}
 
 func TestTransaction(store KeyValueStore) {
 	// とりあえず IncrByのみ
-	store.Set("a", 0)
-	Execute(10000, true, func() {
-		store.IncrBy("a", 1)
+	store.Set("a", "aoieo")
+	Execute(40000, false, func(i int) {
+		// store.Set("a", "aaaes")
+		x := ""
+		store.Get("a", &x)
+		// store.IncrBy("a", 1) // 都合上Redisのほうが速い
 	})
-	fmt.Println(store.IncrBy("a", 0))
+	// fmt.Println(store.IncrBy("a", 0))
 }
 
 func main() {
