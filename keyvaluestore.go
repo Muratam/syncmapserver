@@ -50,7 +50,7 @@ func random() int {
 	return rand.Intn(100)
 }
 func randStr() string {
-	result := ""
+	result := "あいうえおかきくけこ"
 	for i := 0; i < 100; i++ {
 		result += strconv.Itoa(random())
 	}
@@ -266,16 +266,14 @@ func BenchMGetMSetUser4000(store KeyValueStore) {
 		assert(proValue.ID == preValue.(User).ID)
 	}
 }
-func BenchMGetMSetStr10000(store KeyValueStore) {
-	var keys []string
+func BenchMGetMSetStr4000(store KeyValueStore) {
 	localMap := map[string]interface{}{}
-	for i := 0; i < 10000; i++ {
-		key := randStr()
-		localMap[key] = randStr()
-		keys = append(keys, key)
+	for i := 0; i < 4000; i++ {
+		key := keys4000[i]
+		localMap[key] = keys4000[i]
 	}
 	store.MSet(localMap)
-	mgetResult := store.MGet(keys)
+	mgetResult := store.MGet(keys4000)
 	for key, preValue := range localMap {
 		var proValue string
 		mgetResult.Get(key, &proValue)
@@ -297,6 +295,7 @@ func BenchGetSetUser(store KeyValueStore) {
 // List Push の速度 (use ptr ?)
 // Lock を解除したい(RPush / LSet)
 // Transactionをチェックしたい
+// go func を可能に
 
 func Test3(f func(store KeyValueStore), times int) {
 	rand.Seed(time.Now().UnixNano())
@@ -327,21 +326,20 @@ func main() {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	// time.Sleep(3000 * time.Millisecond)
-	// t := 10
-	// Test3(TestGetSetInt, t)
-	// Test3(TestGetSetUser, t)
-	// Test3(TestIncrBy, t)
-	// Test3(TestKeyCount, t)
-	// Test3(TestMGetMSetString, 1)
-	// Test3(TestMGetMSetUser, 1)
-	// Test3(TestMGetMSetInt, 1)
-	// TestMasterSlaveInterpret()
+	t := 10
+	Test3(TestGetSetInt, t)
+	Test3(TestGetSetUser, t)
+	Test3(TestIncrBy, t)
+	Test3(TestKeyCount, t)
+	Test3(TestMGetMSetString, 1)
+	Test3(TestMGetMSetUser, 1)
+	Test3(TestMGetMSetInt, 1)
+	TestMasterSlaveInterpret()
 	fmt.Println("-----------BENCH----------")
 	InitForBenchMGetMSetUser4000()
 	for i := 0; i < 1; i++ {
-		Test3(BenchMGetMSetStr10000, 1)
+		Test3(BenchMGetMSetStr4000, 3)
 		Test3(BenchMGetMSetUser4000, 1)
+		Test3(BenchGetSetUser, 4000)
 	}
-	Test3(BenchGetSetUser, 4000)
 }

@@ -20,11 +20,12 @@ import (
 // NOTE: Redis ラッパーも書くが、ISUCON中はこちらだけ使うことで高速に
 
 const maxSyncMapServerConnectionNum = 15
+const defaultReadBufferSize = 8192                  // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
 const RedisHostPrivateIPAddress = "192.168.111.111" // ここで指定したサーバーに
 // ` NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
 // とすることでSyncMapServerを建てることができる
-const SyncMapBackUpPath = "./syncmapbackup-"
-const DefaultBackUpTimeSecond = 30 // この秒数毎にバックアップファイルを作成する
+const SyncMapBackUpPath = "./syncmapbackup-" // カレントディレクトリにバックアップを作成。パーミッションに注意。
+const DefaultBackUpTimeSecond = 30           // この秒数毎にバックアップファイルを作成する
 func MyServerIsOnMasterServerIP() bool {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
@@ -129,9 +130,8 @@ func readAll(conn net.Conn) []byte {
 		readBufNum, err := conn.Read(buf)
 		if readBufNum != 4 {
 			if readBufNum == 0 {
-				return []byte{}
-				// // WARN:
-				// return readAll(conn)
+				// WARN:
+				return readAll(conn)
 			} else {
 				// WARN
 				log.Panic("too short buf : ", readBufNum)
@@ -145,7 +145,7 @@ func readAll(conn net.Conn) []byte {
 			log.Panic(err)
 		}
 	}
-	readMax := 1024
+	readMax := defaultReadBufferSize
 	var bufAll []byte
 	currentReadLen := 0
 	for currentReadLen < contentLen {
@@ -187,11 +187,24 @@ func writeAll(conn net.Conn, content []byte) {
 // <-> [][]byte    :: join           <-> split
 // <-> []string    :: joinStrsToBytes <-> splitBytesToStrs
 // <-> string      :: byte[]()       <-> string()
+// type MarshalUnmarshalForSpeedUp interface {
+// 	MarshalB(buf []byte) ([]byte, error)
+// 	UnmarshalB(buf []byte) (uint64, error)
+// }
+func MarshalString(this string) []byte {
+	return []byte(this)
+}
+func UnmarshalString(this *string, x []byte) {
+	(*this) = string(x)
+}
 func encodeToBytes(x interface{}) []byte {
 	// if p, ok := x.(User); ok {
 	// 	byf, _ := p.Marshal([]byte{})
 	// 	return byf
 	// }
+	if p, ok := x.(string); ok {
+		return MarshalString(p)
+	}
 	var buf bytes.Buffer
 	err := gob.NewEncoder(&buf).Encode(x)
 	if err != nil {
@@ -201,13 +214,17 @@ func encodeToBytes(x interface{}) []byte {
 }
 
 // 変更できるようにpointer型で受け取ること
-func decodeFromBytes(bytes_ []byte, x interface{}) {
+func decodeFromBytes(input []byte, x interface{}) {
 	// if p, ok := x.(*User); ok {
-	// 	(*p).Unmarshal(bytes_)
+	// 	(*p).Unmarshal(input)
 	// 	return
 	// }
+	if p, ok := x.(*string); ok {
+		UnmarshalString(p, input)
+		return
+	}
 	var buf bytes.Buffer
-	buf.Write(bytes_)
+	buf.Write(input)
 	dec := gob.NewDecoder(&buf)
 	err := dec.Decode(x)
 	if err != nil {
@@ -216,48 +233,65 @@ func decodeFromBytes(bytes_ []byte, x interface{}) {
 }
 
 func join(input [][]byte) []byte {
-	return encodeToBytes(input)
-	// 上ので十分速いので
 	// 要素数 4B (32bit)
 	// (各長さ 4B + データ)を 要素数回
-	// totalSize := 4 + len(input)*4
-	// num := len(input)
-	// for i := 0; i < num; i++ {
-	// 	totalSize += len(input[i])
-	// }
-	// result := make([]byte, totalSize)
-	// copy(result[0:4], format32bit(num))
-	// now := 4
-	// for _, bs := range input {
-	// 	bsLen := len(bs)
-	// 	copy(result[now:4+now], format32bit(bsLen))
-	// 	now += 4
-	// 	copy(result[now:now+bsLen], bs[:])
-	// 	now += bsLen
-	// }
-	// return result
+	totalSize := 4 + len(input)*4
+	num := len(input)
+	for i := 0; i < num; i++ {
+		totalSize += len(input[i])
+	}
+	result := make([]byte, totalSize)
+	copy(result[0:4], format32bit(num))
+	now := 4
+	for _, bs := range input {
+		bsLen := len(bs)
+		copy(result[now:4+now], format32bit(bsLen))
+		now += 4
+		copy(result[now:now+bsLen], bs[:])
+		now += bsLen
+	}
+	return result
 }
 func split(input []byte) [][]byte {
-	var x [][]byte
-	decodeFromBytes(input, &x)
-	return x
-	// num := parse32bit(input[:4])
-	// now := 4
-	// result := make([][]byte, num)
-	// for i := 0; i < num; i++ {
-	// 	bsLen := parse32bit(input[now : now+4])
-	// 	now += 4
-	// 	result[i] = input[now : now+bsLen]
-	// 	now += bsLen
-	// }
-	// return result
+	num := parse32bit(input[:4])
+	now := 4
+	result := make([][]byte, num)
+	for i := 0; i < num; i++ {
+		bsLen := parse32bit(input[now : now+4])
+		now += 4
+		result[i] = input[now : now+bsLen]
+		now += bsLen
+	}
+	return result
 }
 func joinStrsToBytes(input []string) []byte {
-	return encodeToBytes(input)
+	totalSize := 4 + len(input)*4
+	num := len(input)
+	for i := 0; i < num; i++ {
+		totalSize += len(input[i])
+	}
+	result := make([]byte, totalSize)
+	copy(result[0:4], format32bit(num))
+	now := 4
+	for _, bs := range input {
+		bsLen := len(bs)
+		copy(result[now:4+now], format32bit(bsLen))
+		now += 4
+		copy(result[now:now+bsLen], ([]byte(bs))[:])
+		now += bsLen
+	}
+	return result
 }
-func splitBytesToStrs(bytes_ []byte) []string {
-	var result []string
-	decodeFromBytes(bytes_, &result)
+func splitBytesToStrs(input []byte) []string {
+	num := parse32bit(input[:4])
+	now := 4
+	result := make([]string, num)
+	for i := 0; i < num; i++ {
+		bsLen := parse32bit(input[now : now+4])
+		now += 4
+		result[i] = string(input[now : now+bsLen])
+		now += bsLen
+	}
 	return result
 }
 
