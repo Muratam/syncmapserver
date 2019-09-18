@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
+	"net/http"
 
-	// _ "net/http/pprof"
+	_ "net/http/pprof"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -68,12 +70,17 @@ func randUser() User {
 }
 func Execute(times int, isParallel bool, f func(i int)) {
 	if isParallel {
+		maxGoroutineNum := maxSyncMapServerConnectionNum
 		var wg sync.WaitGroup
-		for i := 0; i < times; i++ {
+		// GoRoutine の生成コストはかなり高いので、現実的な状況に合わせる
+		// 10000件同時接続なんてことはありえないはずなので
+		for i := 0; i < maxGoroutineNum; i++ {
 			j := i
 			wg.Add(1)
 			go func() {
-				f(j)
+				for k := 0; k < times/maxGoroutineNum; k++ {
+					f(k*maxGoroutineNum + j)
+				}
 				wg.Done()
 			}()
 		}
@@ -347,18 +354,19 @@ var smMaster KeyValueStore = NewSyncMapServer("127.0.0.1:8080", true)
 var smSlave KeyValueStore = NewSyncMapServer("127.0.0.1:8080", false)
 var redisWrap KeyValueStore = NewRedisWrapper("127.0.0.1:6379")
 
-// var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
-// var names = []string{"smMaster", "smSlave ", "redis   "}
+var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
+var names = []string{"smMaster", "smSlave ", "redis   "}
+
 // var stores = []KeyValueStore{smMaster, redisWrap}
 // var names = []string{"smMaster", "redis   "}
 // var stores = []KeyValueStore{smSlave}
 // var names = []string{"smSlave "}
-var stores = []KeyValueStore{smMaster}
-var names = []string{"smMaster"}
+// var stores = []KeyValueStore{smMaster}
+// var names = []string{"smMaster"}
 
 func TestTransaction(store KeyValueStore) {
 	// とりあえず IncrByのみ
-	Execute(200000, true, func(i int) {
+	Execute(10000, true, func(i int) {
 		key := keys4000[i%4000]
 		preValue := localUserMap4000[key]
 		store.Set(key, preValue)
@@ -371,25 +379,25 @@ func TestTransaction(store KeyValueStore) {
 }
 
 func main() {
-	// go func() {
-	// 	log.Println(http.ListenAndServe("localhost:6060", nil))
-	// }()
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 	InitForBenchMGetMSetUser4000()
-	// t := 10
-	// Test3(TestGetSetInt, t)
-	// Test3(TestGetSetUser, t)
-	// Test3(TestIncrBy, t)
-	// Test3(TestKeyCount, t)
-	// Test3(TestMGetMSetString, 1)
-	// Test3(TestMGetMSetUser, 1)
-	// Test3(TestMGetMSetInt, 1)
-	// TestMasterSlaveInterpret()
-	// fmt.Println("-----------BENCH----------")
-	// for i := 0; i < 1; i++ {
-	// 	Test3(BenchMGetMSetStr4000, 3)
-	// 	Test3(BenchMGetMSetUser4000, 1)
-	// 	Test3(BenchGetSetUser, 4000)
-	// }
+	t := 10
+	Test3(TestGetSetInt, t)
+	Test3(TestGetSetUser, t)
+	Test3(TestIncrBy, t)
+	Test3(TestKeyCount, t)
+	Test3(TestMGetMSetString, 1)
+	Test3(TestMGetMSetUser, 1)
+	Test3(TestMGetMSetInt, 1)
+	TestMasterSlaveInterpret()
+	fmt.Println("-----------BENCH----------")
+	for i := 0; i < 1; i++ {
+		Test3(BenchMGetMSetStr4000, 3)
+		Test3(BenchMGetMSetUser4000, 1)
+		Test3(BenchGetSetUser, 4000)
+	}
 	TestAverage3(TestTransaction, 1000)
 
 }
