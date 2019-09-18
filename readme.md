@@ -36,6 +36,7 @@
 1. TODO: 一つのキーに保存された list の 全てを一括取得も実装しておきたい
 1. TODO: 再起動試験に弱そう
 1. join / split はもっと高速化できそう(bytes.Buffer?)
+1. KeepAlive Time は大丈夫か？ (SetKeepAlive / SetKeepAlivePeriod)
 - METHOD:
   - 本家は RPush が一度に複数送信できるっぽい
 # ISUCONでの使用時のヒント

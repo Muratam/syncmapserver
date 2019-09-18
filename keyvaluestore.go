@@ -2,10 +2,9 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"math/rand"
-	"net/http"
-	_ "net/http/pprof"
+
+	// _ "net/http/pprof"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -316,7 +315,7 @@ func BenchGetSetUser(store KeyValueStore) {
 // Transactionをチェックしたい
 // go func を可能に
 
-func Test3(f func(store KeyValueStore), times int) {
+func Test3(f func(store KeyValueStore), times int) (milliSecs []int64) {
 	rand.Seed(time.Now().UnixNano())
 	fmt.Println("------- ", runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name(), " x ", times, " -------")
 	for i, store := range stores {
@@ -326,7 +325,20 @@ func Test3(f func(store KeyValueStore), times int) {
 			f(store)
 		}
 		duration := time.Now().Sub(start)
-		fmt.Println(names[i], ":", int64(duration/time.Millisecond), "ms")
+		milliSecs = append(milliSecs, int64(duration/time.Millisecond))
+		fmt.Println(names[i], ":", milliSecs[i], "ms")
+	}
+	return milliSecs
+}
+func TestAverage3(f func(store KeyValueStore), times int) {
+	milliSecs := make([]int64, len(stores))
+	for n := 1; n < times; n++ {
+		resMilliSecs := Test3(TestTransaction, 1)
+		fmt.Println("AVERAGE:")
+		for i := 0; i < len(milliSecs); i++ {
+			milliSecs[i] += resMilliSecs[i]
+			fmt.Println("  ", names[i], ":", milliSecs[i]/int64(n), "ms")
+		}
 	}
 }
 
@@ -335,30 +347,34 @@ var smMaster KeyValueStore = NewSyncMapServer("127.0.0.1:8080", true)
 var smSlave KeyValueStore = NewSyncMapServer("127.0.0.1:8080", false)
 var redisWrap KeyValueStore = NewRedisWrapper("127.0.0.1:6379")
 
-var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
-var names = []string{"smMaster", "smSlave ", "redis   "}
-
+// var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
+// var names = []string{"smMaster", "smSlave ", "redis   "}
 // var stores = []KeyValueStore{smMaster, redisWrap}
 // var names = []string{"smMaster", "redis   "}
 // var stores = []KeyValueStore{smSlave}
 // var names = []string{"smSlave "}
+var stores = []KeyValueStore{smMaster}
+var names = []string{"smMaster"}
 
 func TestTransaction(store KeyValueStore) {
 	// とりあえず IncrByのみ
-	store.Set("a", "aoieo")
-	Execute(40000, true, func(i int) {
-		// store.Set("a", "aaaes")
-		x := ""
-		store.Get("a", &x)
+	Execute(200000, true, func(i int) {
+		key := keys4000[i%4000]
+		preValue := localUserMap4000[key]
+		store.Set(key, preValue)
+		proValue := User{}
+		store.Get(key, &proValue)
+		assert(preValue == proValue)
 		// store.IncrBy("a", 1) // 都合上Redisのほうが速い
 	})
 	// fmt.Println(store.IncrBy("a", 0))
 }
 
 func main() {
-	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
-	}()
+	// go func() {
+	// 	log.Println(http.ListenAndServe("localhost:6060", nil))
+	// }()
+	InitForBenchMGetMSetUser4000()
 	// t := 10
 	// Test3(TestGetSetInt, t)
 	// Test3(TestGetSetUser, t)
@@ -369,14 +385,11 @@ func main() {
 	// Test3(TestMGetMSetInt, 1)
 	// TestMasterSlaveInterpret()
 	// fmt.Println("-----------BENCH----------")
-	// InitForBenchMGetMSetUser4000()
 	// for i := 0; i < 1; i++ {
 	// 	Test3(BenchMGetMSetStr4000, 3)
 	// 	Test3(BenchMGetMSetUser4000, 1)
 	// 	Test3(BenchGetSetUser, 4000)
 	// }
-	for {
-		Test3(TestTransaction, 1)
-	}
+	TestAverage3(TestTransaction, 1000)
 
 }
