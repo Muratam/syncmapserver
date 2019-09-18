@@ -75,7 +75,7 @@ type User struct {
 	// CreatedAt    time.Time `json:"-" db:"created_at"`
 }
 
-func TestGetSetInt(store KeyValueStore) {
+func TestGetSetInt(store KeyValueStoreConnWithTransaction) {
 	// int を Get して Set するだけの 一番基本的なやつ
 	n := random()
 	x := 0
@@ -90,7 +90,7 @@ func TestGetSetInt(store KeyValueStore) {
 	ok := store.Get("nop", &x)
 	assert(!ok)
 }
-func TestGetSetUser(store KeyValueStore) {
+func TestGetSetUser(store KeyValueStoreConnWithTransaction) {
 	// userデータ を Get して Set するだけ
 	// Pointer 型 は渡せないことに注意。struct in struct は多分大丈夫。
 	u := randUser()
@@ -101,7 +101,7 @@ func TestGetSetUser(store KeyValueStore) {
 	ok := store.Get("nop", &u)
 	assert(!ok)
 }
-func TestIncrBy(store KeyValueStore) {
+func TestIncrBy(store KeyValueStoreConnWithTransaction) {
 	n := random()
 	x := 0
 	store.Set("x", n)
@@ -115,7 +115,7 @@ func TestIncrBy(store KeyValueStore) {
 	assert(added1 == added2)
 	assert(added1 == pre+add)
 }
-func TestKeyCount(store KeyValueStore) {
+func TestKeyCount(store KeyValueStoreConnWithTransaction) {
 	store.FlushAll()
 	assert(store.DBSize() == 0)
 	key1 := "key1"
@@ -137,7 +137,7 @@ func TestKeyCount(store KeyValueStore) {
 	assert(store.Exists(key2))
 	assert(store.DBSize() == 2)
 }
-func TestMGetMSetString(store KeyValueStore) {
+func TestMGetMSetString(store KeyValueStoreConnWithTransaction) {
 	var keys []string
 	localMap := map[string]interface{}{}
 	for i := 0; i < 1000; i++ {
@@ -164,7 +164,7 @@ func TestMGetMSetString(store KeyValueStore) {
 	}
 }
 
-func TestMGetMSetUser(store KeyValueStore) {
+func TestMGetMSetUser(store KeyValueStoreConnWithTransaction) {
 	var keys []string
 	localMap := map[string]interface{}{}
 	for i := 0; i < 1000; i++ {
@@ -184,7 +184,7 @@ func TestMGetMSetUser(store KeyValueStore) {
 		assert(proValue == preValue)
 	}
 }
-func TestMGetMSetInt(store KeyValueStore) {
+func TestMGetMSetInt(store KeyValueStoreConnWithTransaction) {
 	var keys []string
 	localMap := map[string]interface{}{}
 	for i := 0; i < 1000; i++ {
@@ -256,7 +256,7 @@ func InitForBenchMGetMSetUser4000() {
 		keys4000 = append(keys4000, key)
 	}
 }
-func BenchMGetMSetUser4000(store KeyValueStore) {
+func BenchMGetMSetUser4000(store KeyValueStoreConnWithTransaction) {
 	store.MSet(localUserMap4000)
 	mgetResult := store.MGet(keys4000)
 	for key, preValue := range localUserMap4000 {
@@ -265,7 +265,7 @@ func BenchMGetMSetUser4000(store KeyValueStore) {
 		assert(proValue.ID == preValue.(User).ID)
 	}
 }
-func BenchMGetMSetStr4000(store KeyValueStore) {
+func BenchMGetMSetStr4000(store KeyValueStoreConnWithTransaction) {
 	localMap := map[string]interface{}{}
 	for i := 0; i < 4000; i++ {
 		key := keys4000[i]
@@ -279,7 +279,7 @@ func BenchMGetMSetStr4000(store KeyValueStore) {
 		assert(proValue[0] == preValue.(string)[0])
 	}
 }
-func BenchGetSetUser(store KeyValueStore) {
+func BenchGetSetUser(store KeyValueStoreConnWithTransaction) {
 	k := keys4000[0]
 	u := localUserMap4000[keys4000[0]].(User)
 	store.Set(k, u)
@@ -287,7 +287,7 @@ func BenchGetSetUser(store KeyValueStore) {
 	store.Get(k, &u2)
 	assert(u.ID == u2.ID)
 }
-func BenchParallelIncryBy(store KeyValueStore) {
+func BenchParallelIncryBy(store KeyValueStoreConnWithTransaction) {
 	store.Set("a", 0)
 	Execute(10000, true, func(i int) {
 		store.IncrBy("a", i)
@@ -295,7 +295,7 @@ func BenchParallelIncryBy(store KeyValueStore) {
 	fmt.Println(store.IncrBy("a", 0) == 49995000)
 }
 
-func BenchParallelUserGetSet(store KeyValueStore) {
+func BenchParallelUserGetSet(store KeyValueStoreConnWithTransaction) {
 	Execute(10000, true, func(i int) {
 		key := keys4000[i%4000]
 		preValue := localUserMap4000[key]
@@ -312,7 +312,7 @@ func BenchParallelUserGetSet(store KeyValueStore) {
 // Transactionをチェックしたい
 // go func を可能に
 
-func Test3(f func(store KeyValueStore), times int) (milliSecs []int64) {
+func Test3(f func(store KeyValueStoreConnWithTransaction), times int) (milliSecs []int64) {
 	rand.Seed(time.Now().UnixNano())
 	fmt.Println("------- ", runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name(), " x ", times, " -------")
 	for i, store := range stores {
@@ -327,7 +327,7 @@ func Test3(f func(store KeyValueStore), times int) (milliSecs []int64) {
 	}
 	return milliSecs
 }
-func TestAverage3(f func(store KeyValueStore), times int) {
+func TestAverage3(f func(store KeyValueStoreConnWithTransaction), times int) {
 	milliSecs := make([]int64, len(stores))
 	for n := 1; n < times; n++ {
 		resMilliSecs := Test3(f, 1)
@@ -340,18 +340,18 @@ func TestAverage3(f func(store KeyValueStore), times int) {
 }
 
 // NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) のように ISUCON本本では使う
-var smMaster KeyValueStore = NewSyncMapServer("127.0.0.1:8080", true)
-var smSlave KeyValueStore = NewSyncMapServer("127.0.0.1:8080", false)
-var redisWrap KeyValueStore = NewRedisWrapper("127.0.0.1:6379")
+var smMaster = NewSyncMapServer("127.0.0.1:8080", true).GetConn()
+var smSlave = NewSyncMapServer("127.0.0.1:8080", false).GetConn()
+var redisWrap = NewRedisWrapper("127.0.0.1:6379")
 
-var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
+var stores = []KeyValueStoreConnWithTransaction{smMaster, smSlave, redisWrap}
 var names = []string{"smMaster", "smSlave ", "redis   "}
 
-// var stores = []KeyValueStore{smMaster, redisWrap}
+// var stores = []KeyValueStoreConnWithTransaction{smMaster, redisWrap}
 // var names = []string{"smMaster", "redis   "}
-// var stores = []KeyValueStore{smSlave}
+// var stores = []KeyValueStoreConnWithTransaction{smSlave}
 // var names = []string{"smSlave "}
-// var stores = []KeyValueStore{smMaster}
+// var stores = []KeyValueStoreConnWithTransaction{smMaster}
 // var names = []string{"smMaster"}
 
 func main() {

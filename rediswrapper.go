@@ -4,7 +4,6 @@ package main
 // どうせシリアライズする必要があるので、 int 値以外は全て[]byteにしている。
 //  (int値は IncrByの都合上そのまま置く必要があるので[]byteにしていない)
 import (
-	"fmt"
 	"strconv"
 
 	"github.com/go-redis/redis"
@@ -26,6 +25,7 @@ func NewRedisWrapper(address string) RedisWrapper {
 	return result
 }
 
+// General Commands
 func (this RedisWrapper) Get(key string, value interface{}) bool {
 	got := this.Redis.Get(key)
 	if gotInt, err := got.Int(); err == nil {
@@ -47,7 +47,6 @@ func (this RedisWrapper) Set(key string, value interface{}) {
 	bs := encodeToBytes(value)
 	this.Redis.Set(key, bs, 0)
 }
-
 func (this RedisWrapper) MGet(keys []string) MGetResult {
 	// TODO: int64
 	loads := this.Redis.MGet(keys...).Val()
@@ -80,19 +79,20 @@ func (this RedisWrapper) MSet(store map[string]interface{}) {
 	}
 	this.Redis.MSet(pairs...)
 }
-
-func (this RedisWrapper) IncrBy(key string, value int) int {
-	return int(this.Redis.IncrBy(key, int64(value)).Val())
-}
-
 func (this RedisWrapper) Exists(key string) bool {
 	return this.Redis.Exists(key).Val() == 1
 }
 func (this RedisWrapper) Del(key string) {
 	this.Redis.Del(key)
 }
+func (this RedisWrapper) IncrBy(key string, value int) int {
+	return int(this.Redis.IncrBy(key, int64(value)).Val())
+}
 func (this RedisWrapper) DBSize() int {
 	return int(this.Redis.DBSize().Val())
+}
+func (this RedisWrapper) FlushAll() {
+	this.Redis.FlushAll()
 }
 
 // List 系は全て Encode して保存(intも)
@@ -116,21 +116,15 @@ func (this RedisWrapper) LSet(key string, index int, value interface{}) {
 	this.Redis.LSet(key, int64(index), encodeToBytes(value))
 }
 
-func (this RedisWrapper) FlushAll() {
-	this.Redis.FlushAll()
-}
-
-func (this RedisWrapper) StartTransactionWithKey(key string, f func(tx *KeyValueStoreTransaction)) {
+func (this RedisWrapper) Transaction(keys []string, f func()) (isok bool) {
 	err := this.Redis.Watch(func(tx *redis.Tx) error {
-		_, err = tx.Pipelined(func(pipe redis.Pipeliner) error {
-			f(pipe)
+		_, err := tx.Pipelined(func(pipe redis.Pipeliner) error {
 			// count, err = pipe.Get("key").Int()
 			// pipe.Set("key", count+1, 0)
+			f()
 			return nil
 		})
 		return err
-	}, key)
-	if err != nil {
-		fmt.Panic("Redisのトランザクションに失敗しました", err)
-	}
+	}, keys...)
+	return err == nil
 }

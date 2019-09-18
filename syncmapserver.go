@@ -431,7 +431,7 @@ func (this SyncMapServerConn) parseSet(input [][]byte) {
 }
 
 // MGET : 変更できるようにpointer型で受け取ること
-func (this SyncMapServerConn) MGet(keys []string, connIndex int) MGetResult {
+func (this SyncMapServerConn) MGet(keys []string) MGetResult {
 	result := newMGetResult()
 	if this.IsMasterServer() {
 		for _, key := range keys {
