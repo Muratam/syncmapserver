@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"strconv"
@@ -26,6 +27,7 @@ const RedisHostPrivateIPAddress = "192.168.111.111" // ここで指定したサ�
 // とすることでSyncMapServerを建てることができる
 const SyncMapBackUpPath = "./syncmapbackup-" // カレントディレクトリにバックアップを作成。パーミッションに注意。
 const DefaultBackUpTimeSecond = 30           // この秒数毎にバックアップファイルを作成する
+
 func MyServerIsOnMasterServerIP() bool {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
@@ -49,14 +51,19 @@ type SyncMapServer struct {
 	KeyCount             MutexInt
 	substanceAddress     string
 	masterPort           int
-	connectNum           MutexInt
 	mutex                sync.Mutex
 	IsLocked             bool
 	mutexMap             sync.Map // string -> sync.Mutex
 	lockedMap            sync.Map // string -> bool
-	FirstConn            net.Conn
+	connectionPool       []net.Conn
+	connectionPoolStatus []MutexInt
 	MySendCustomFunction func(this *SyncMapServer, buf []byte) []byte
 }
+
+const ConnectionPoolStatusDisconnected = 0 // 未接続の状態
+const ConnectionPoolStatusUsing = 1        //
+const ConnectionPoolStatusEmpty = 2
+
 type SyncMapServerTransaction struct {
 	server      *SyncMapServer
 	specificKey bool // 特定のキーのみロックするタイプのやつか
@@ -569,10 +576,10 @@ func (this *SyncMapServer) FlushAllDirect() {
 	this.lockedMap = lockedMap
 	var keyCount MutexInt
 	this.KeyCount = keyCount
-	// WARN: connectNum
 	var mutex sync.Mutex
 	this.mutex = mutex
 	this.IsLocked = false
+	// WARN: 接続しているコネクションは再設定したほうがよい？
 }
 func (this *SyncMapServer) flushAllImpl(forceDirect, forceConnection bool) {
 	if forceDirect || this.IsMasterServer() {
@@ -966,6 +973,7 @@ func newMasterSyncMapServer(port int) *SyncMapServer {
 				for {
 					writeAll(conn, this.interpretWrapFunction(readAll(conn)))
 				}
+				// PoolするのでconnectionはCloseさせない。
 				// conn.Close()
 			}()
 		}
@@ -989,8 +997,11 @@ func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	}
 	this.masterPort = port
 	this.MySendCustomFunction = func(this *SyncMapServer, buf []byte) []byte { return buf }
-	conn, err := net.Dial("tcp", this.substanceAddress)
-	this.FirstConn = conn
+	// WARN: Transaction時は強引に作成するので想定数よりも増えるので多めに確保
+	this.connectionPool = make([]net.Conn, maxSyncMapServerConnectionNum*10)
+	this.connectionPoolStatus = make([]MutexInt, maxSyncMapServerConnectionNum*10)
+	// 要求があって初めて接続する。再起動試験では起動順序が一律ではないため。
+	// Redisがそういう仕組みなのでこちらもそのようにしておく
 	return this
 }
 func (this *SyncMapServer) getPath() string {
@@ -1105,28 +1116,50 @@ func (this *SyncMapServer) send(f func() []byte, force bool) []byte {
 	}
 }
 func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
-	// if !force {
-	// 	for this.connectNum.Get() > maxSyncMapServerConnectionNum {
-	// 		time.Sleep(time.Duration(100+rand.Intn(400)) * time.Nanosecond)
-	// 	}
-	// }
-	// this.connectNum.Inc()
-	// conn, err := net.Dial("tcp", this.substanceAddress)
-	// if err != nil {
-	// 	fmt.Println("Client", this.connectNum.Get(), err)
-	// 	if conn != nil {
-	// 		conn.Close()
-	// 	}
-	// 	time.Sleep(1 * time.Millisecond)
-	// 	this.connectNum.Dec()
-	// 	return this.sendBySlave(f, force)
-	// }
-	// writeAll(conn, f())
-	// result := readAll(conn)
-	// conn.Close()
-	// this.connectNum.Dec()
-	writeAll(this.FirstConn, f())
-	result := readAll(this.FirstConn)
+	poolIndex := -1
+	poolStatus := -1
+	findEmptyConnection := func(startIndex, endIndex int) {
+		for {
+			for i := 0; i < maxSyncMapServerConnectionNum; i++ {
+				this.connectionPoolStatus[i].Transaction(func(in int) int {
+					if in != ConnectionPoolStatusUsing {
+						poolStatus = in
+					}
+					return ConnectionPoolStatusUsing
+				})
+				if poolStatus != -1 { // 空いているのがあった！
+					poolIndex = i
+					return
+				}
+			}
+			time.Sleep(time.Duration(100+rand.Intn(400)) * time.Nanosecond)
+		}
+	}
+	if !force {
+		findEmptyConnection(0, maxSyncMapServerConnectionNum)
+	} else {
+		findEmptyConnection(maxSyncMapServerConnectionNum, maxSyncMapServerConnectionNum*10)
+	}
+	conn := this.connectionPool[poolIndex]
+	if poolStatus == ConnectionPoolStatusDisconnected {
+		newConn, err := net.Dial("tcp", this.substanceAddress)
+		if err != nil {
+			fmt.Println("Client TCP Connect Error", err)
+			if newConn != nil {
+				newConn.Close()
+			}
+			time.Sleep(1 * time.Millisecond)
+			// もう専有しているので Set するのに Lockする必要はない。
+			this.connectionPoolStatus[poolIndex].val = ConnectionPoolStatusDisconnected
+			return this.sendBySlave(f, force)
+		}
+		conn = newConn
+	}
+	writeAll(conn, f())
+	result := readAll(conn)
+	this.connectionPool[poolIndex] = conn
+	// もう専有しているので Set するのに Lockする必要はない。
+	this.connectionPoolStatus[poolIndex].val = ConnectionPoolStatusEmpty
 	return result
 }
 
@@ -1157,6 +1190,13 @@ func (this *MutexInt) Inc() int {
 func (this *MutexInt) Dec() int {
 	this.mutex.Lock()
 	this.val -= 1
+	val := this.val
+	this.mutex.Unlock()
+	return val
+}
+func (this *MutexInt) Transaction(f func(input int) (output int)) int {
+	this.mutex.Lock()
+	this.val = f(this.val)
 	val := this.val
 	this.mutex.Unlock()
 	return val
