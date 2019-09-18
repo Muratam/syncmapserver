@@ -356,8 +356,6 @@ func TestTransaction(store KeyValueStore) {
 }
 
 func main() {
-	cpus := runtime.NumCPU()
-	runtime.GOMAXPROCS(cpus)
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()

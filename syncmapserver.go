@@ -967,13 +967,17 @@ func newMasterSyncMapServer(port int) *SyncMapServer {
 	this.substanceAddress = ""
 	this.masterPort = port
 	go func() {
-		listen, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(port))
+		tcpAddr, err := net.ResolveTCPAddr("tcp4", "0.0.0.0:"+strconv.Itoa(port))
+		if err != nil {
+			log.Panic("net cannot resolve TCP Addr error ", err)
+		}
+		listen, err := net.ListenTCP("tcp", tcpAddr)
 		defer listen.Close()
 		if err != nil {
 			panic(err)
 		}
 		for {
-			conn, err := listen.Accept()
+			conn, err := listen.AcceptTCP()
 			if err != nil {
 				fmt.Println("Server:", err)
 				continue
@@ -1153,7 +1157,6 @@ func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
 		if err != nil {
 			log.Panic("net resolve TCP Addr error ", err)
 		}
-		// WARN: nil ?
 		newConn, err := net.DialTCP("tcp", nil, tcpAddr)
 		if err != nil {
 			fmt.Println("Client TCP Connect Error", err)
