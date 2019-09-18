@@ -7,6 +7,7 @@ require (
 	github.com/andyleap/parser v0.0.0-20160126201130-db5a13a7cd46 // indirect
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e // indirect
 	github.com/go-redis/redis v6.15.5+incompatible // indirect
+	github.com/golang-collections/collections v0.0.0-20130729185459-604e922904d3 // indirect
 	github.com/google/pprof v0.0.0-20190908185732-236ed259b199 // indirect
 	github.com/ianlancetaylor/demangle v0.0.0-20181102032728-5e5cf60278f6 // indirect
 	github.com/kr/pretty v0.1.0 // indirect
