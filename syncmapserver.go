@@ -56,7 +56,7 @@ type SyncMapServer struct {
 	substanceAddress string
 	masterPort       int
 	// コネクションはプールして再利用する
-	connectionPool                     []net.Conn
+	connectionPool                     [](*net.TCPConn)
 	connectionPoolStatus               []int
 	connectionPoolEmptyIndexStack      *stack.Stack
 	connectionPoolEmptyIndexStackMutex sync.Mutex
@@ -1007,7 +1007,7 @@ func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	this.masterPort = port
 	this.MySendCustomFunction = func(this *SyncMapServer, buf []byte) []byte { return buf }
 	// WARN: Transaction時は強引に作成するので想定数よりも増えるので多めに確保
-	this.connectionPool = make([]net.Conn, maxSyncMapServerConnectionNum*10)
+	this.connectionPool = make([]*net.TCPConn, maxSyncMapServerConnectionNum*10)
 	this.connectionPoolStatus = make([]int, maxSyncMapServerConnectionNum*10)
 	this.connectionPoolEmptyIndexStack = stack.New()
 	for i := 0; i < maxSyncMapServerConnectionNum; i++ {
@@ -1149,7 +1149,12 @@ func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
 	poolStatus := this.connectionPoolStatus[poolIndex]
 	conn := this.connectionPool[poolIndex]
 	if poolStatus == ConnectionPoolStatusDisconnected {
-		newConn, err := net.Dial("tcp", this.substanceAddress)
+		tcpAddr, err := net.ResolveTCPAddr("tcp4", this.substanceAddress)
+		if err != nil {
+			log.Panic("net resolve TCP Addr error ", err)
+		}
+		// WARN: nil ?
+		newConn, err := net.DialTCP("tcp", nil, tcpAddr)
 		if err != nil {
 			fmt.Println("Client TCP Connect Error", err)
 			if newConn != nil {

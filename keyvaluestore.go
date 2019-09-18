@@ -346,7 +346,7 @@ var names = []string{"smMaster", "smSlave ", "redis   "}
 func TestTransaction(store KeyValueStore) {
 	// とりあえず IncrByのみ
 	store.Set("a", "aoieo")
-	Execute(40000, false, func(i int) {
+	Execute(40000, true, func(i int) {
 		// store.Set("a", "aaaes")
 		x := ""
 		store.Get("a", &x)
@@ -356,12 +356,11 @@ func TestTransaction(store KeyValueStore) {
 }
 
 func main() {
+	cpus := runtime.NumCPU()
+	runtime.GOMAXPROCS(cpus)
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	for {
-		Test3(TestTransaction, 1)
-	}
 	// t := 10
 	// Test3(TestGetSetInt, t)
 	// Test3(TestGetSetUser, t)
@@ -378,4 +377,8 @@ func main() {
 	// 	Test3(BenchMGetMSetUser4000, 1)
 	// 	Test3(BenchGetSetUser, 4000)
 	// }
+	for {
+		Test3(TestTransaction, 1)
+	}
+
 }
