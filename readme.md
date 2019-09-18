@@ -35,7 +35,7 @@
 1. TODO: さらにさらにGoのコードにSQLを変換したい。
 1. TODO: 一つのキーに保存された list の 全てを一括取得も実装しておきたい
 1. TODO: 再起動試験に弱そう
-1. join / split はもっと高速化できそう(EncodeAt/DecodeByをちゃんとjoin/splitに置き換える)
+1. join / split はもっと高速化できそう(bytes.Buffer?)
 - METHOD:
   - 本家は RPush が一度に複数送信できるっぽい
 # ISUCONでの使用時のヒント

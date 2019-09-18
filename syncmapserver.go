@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-collections/collections/stack"
@@ -20,8 +21,7 @@ import (
 // NOTE: package syncmapserver を main とかに変える
 // NOTE: 環境変数 REDIS_HOST に 12.34.56.78 などのIPアドレスを入れる
 // NOTE: Redis ラッパーも書くが、ISUCON中はこちらだけ使うことで高速に
-
-const maxSyncMapServerConnectionNum = 50
+const maxSyncMapServerConnectionNum = 16
 const defaultReadBufferSize = 8192                  // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
 const RedisHostPrivateIPAddress = "192.168.111.111" // ここで指定したサーバーに
 // ` NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
@@ -51,7 +51,7 @@ type SyncMapServer struct {
 	SyncMap   sync.Map // string -> (byte[] | byte[][])
 	mutexMap  sync.Map // string -> sync.Mutex
 	lockedMap sync.Map // string -> bool
-	KeyCount  MutexInt
+	KeyCount  int32
 	// 接続情報
 	substanceAddress string
 	masterPort       int
@@ -341,6 +341,7 @@ func (this *SyncMapServer) interpretWrapFunction(buf []byte) []byte {
 	if len(ss) < 1 {
 		panic(nil)
 	}
+	// fmt.Println("RECIEVED:", len(buf), "Bytes")
 	switch string(ss[0]) {
 	// General Commands
 	case syncMapCommandGet:
@@ -583,8 +584,7 @@ func (this *SyncMapServer) FlushAllDirect() {
 	this.mutexMap = mutexMap
 	var lockedMap sync.Map
 	this.lockedMap = lockedMap
-	var keyCount MutexInt
-	this.KeyCount = keyCount
+	this.KeyCount = 0
 	var mutex sync.Mutex
 	this.mutex = mutex
 	this.IsLocked = false
@@ -635,7 +635,7 @@ func (this *SyncMapServerTransaction) Exists(key string) bool {
 // SyncMapに保存されている要素数を取得
 func (this *SyncMapServer) dbSizeImpl(forceDirect, forceConnection bool) int {
 	if forceDirect || this.IsMasterServer() {
-		return this.KeyCount.Get()
+		return int(this.KeyCount)
 	} else {
 		encoded := this.send(func() []byte {
 			return join([][]byte{
@@ -1105,7 +1105,7 @@ func (this *SyncMapServer) storeDirect(key string, value interface{}) {
 		var m sync.Mutex
 		this.mutexMap.Store(key, &m)
 		this.lockedMap.Store(key, false)
-		this.KeyCount.Inc()
+		atomic.AddInt32(&this.KeyCount, 1)
 	}
 	this.SyncMap.Store(key, value)
 }
@@ -1117,7 +1117,7 @@ func (this *SyncMapServer) deleteDirect(key string) {
 	this.SyncMap.Delete(key)
 	this.mutexMap.Delete(key)
 	this.lockedMap.Delete(key)
-	this.KeyCount.Dec()
+	atomic.AddInt32(&this.KeyCount, -1)
 }
 
 // 生のbyteを送信
@@ -1128,40 +1128,25 @@ func (this *SyncMapServer) send(f func() []byte, force bool) []byte {
 		return this.sendBySlave(f, force)
 	}
 }
+
+// 仮の実装。全てが同じくらいの重さとした場合の理論値を出す
+// -> スケールしてそう
+var xxxMutexes = make([]sync.Mutex, maxSyncMapServerConnectionNum)
+var xxxSum int32 = 0
+
 func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
-	poolIndex := -1
-	poolStatus := -1
-	sleep := func() {
-		time.Sleep(1 * time.Nanosecond)
-		// time.Sleep(time.Duration(1000+rand.Intn(4000)) * time.Nanosecond)
-	}
-	// Lockの回数を減らしたい。
-	// この関数は0のときにはLockしてその後1減らす。
-	findEmptyConnection := func() {
-		for {
-			// Lock とかするまえにそもそも 0 なら望みがない
-			if this.connectionPoolEmptyIndexStack.Len() == 0 {
-				sleep()
-				continue
-			}
-			this.connectionPoolEmptyIndexStackMutex.Lock()
-			if this.connectionPoolEmptyIndexStack.Len() == 0 {
-				this.connectionPoolEmptyIndexStackMutex.Unlock()
-				sleep()
-				continue
-			}
-			poolIndex = this.connectionPoolEmptyIndexStack.Pop().(int)
-			this.connectionPoolEmptyIndexStackMutex.Unlock()
-			poolStatus = this.connectionPoolStatus[poolIndex]
-			return
-		}
-	}
-	if !force {
-		findEmptyConnection()
-	} else { // TODO: 意味がなくなっている
+	if force { // TODO:
 		log.Panic("Not Implementent Transaction")
-		// findEmptyConnection(maxSyncMapServerConnectionNum, maxSyncMapServerConnectionNum*10)
 	}
+	// モデルとしては重いコネクションと軽いコネクションがあるはずなので。
+	// 均等にするのではなく軽いやつは軽いやつでどんどんやってもらいたい
+	// Lock()するので1台しか使わない実装 (速度が同じくらい出てほしいが、 findRunnableが遅いのでたいへん)
+	// ゴルーチン生成コストは一瞬だが、 Lock() 待ちが多すぎて時間がかかっている
+	poolIndex := atomic.AddInt32(&xxxSum, 1) % maxSyncMapServerConnectionNum
+	xxxMutexes[poolIndex].Lock()
+	// this.connectionPoolEmptyIndexStackMutex.Lock()
+	// poolIndex := this.connectionPoolEmptyIndexStack.Pop().(int)
+	poolStatus := this.connectionPoolStatus[poolIndex]
 	conn := this.connectionPool[poolIndex]
 	if poolStatus == ConnectionPoolStatusDisconnected {
 		newConn, err := net.Dial("tcp", this.substanceAddress)
@@ -1172,6 +1157,8 @@ func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
 			}
 			time.Sleep(1 * time.Millisecond)
 			this.connectionPoolStatus[poolIndex] = ConnectionPoolStatusDisconnected
+			xxxMutexes[poolIndex].Unlock()
+			// this.connectionPoolEmptyIndexStackMutex.Unlock()
 			return this.sendBySlave(f, force)
 		}
 		conn = newConn
@@ -1180,47 +1167,8 @@ func (this *SyncMapServer) sendBySlave(f func() []byte, force bool) []byte {
 	result := readAll(conn)
 	this.connectionPool[poolIndex] = conn
 	this.connectionPoolStatus[poolIndex] = ConnectionPoolStatusEmpty
-	this.connectionPoolEmptyIndexStackMutex.Lock()
-	this.connectionPoolEmptyIndexStack.Push(poolIndex)
-	this.connectionPoolEmptyIndexStackMutex.Unlock()
+	// this.connectionPoolEmptyIndexStack.Push(poolIndex)
+	xxxMutexes[poolIndex].Unlock()
+	// this.connectionPoolEmptyIndexStackMutex.Unlock()
 	return result
-}
-
-// MutexInt ////////////////////////////////////////////
-type MutexInt struct {
-	mutex sync.Mutex
-	val   int
-}
-
-func (this *MutexInt) Set(value int) {
-	this.mutex.Lock()
-	this.val = value
-	this.mutex.Unlock()
-}
-func (this *MutexInt) Get() int {
-	this.mutex.Lock()
-	val := this.val
-	this.mutex.Unlock()
-	return val
-}
-func (this *MutexInt) Inc() int {
-	this.mutex.Lock()
-	this.val += 1
-	val := this.val
-	this.mutex.Unlock()
-	return val
-}
-func (this *MutexInt) Dec() int {
-	this.mutex.Lock()
-	this.val -= 1
-	val := this.val
-	this.mutex.Unlock()
-	return val
-}
-func (this *MutexInt) Transaction(f func(input int) (output int)) int {
-	this.mutex.Lock()
-	this.val = f(this.val)
-	val := this.val
-	this.mutex.Unlock()
-	return val
 }

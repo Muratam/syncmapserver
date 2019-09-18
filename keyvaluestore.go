@@ -334,12 +334,13 @@ var smMaster KeyValueStore = NewSyncMapServer("127.0.0.1:8080", true)
 var smSlave KeyValueStore = NewSyncMapServer("127.0.0.1:8080", false)
 var redisWrap KeyValueStore = NewRedisWrapper("127.0.0.1:6379")
 
-// var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
-// var names = []string{"smMaster", "smSlave ", "redis   "}
+var stores = []KeyValueStore{smMaster, smSlave, redisWrap}
+var names = []string{"smMaster", "smSlave ", "redis   "}
+
 // var stores = []KeyValueStore{smMaster, redisWrap}
 // var names = []string{"smMaster", "redis   "}
-var stores = []KeyValueStore{smSlave}
-var names = []string{"smSlave "}
+// var stores = []KeyValueStore{smSlave}
+// var names = []string{"smSlave "}
 
 func TestTransaction(store KeyValueStore) {
 	// とりあえず IncrByのみ
