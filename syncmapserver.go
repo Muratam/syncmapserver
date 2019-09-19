@@ -215,8 +215,17 @@ func writeAll(conn net.Conn, content []byte) {
 	if contentLen >= 4294967296 {
 		log.Panic("Too Long Content", contentLen)
 	}
-	conn.Write(format32bit(contentLen))
-	conn.Write(content)
+	n := contentLen + 4
+	packet := make([]byte, n)
+	size := format32bit(contentLen)
+	packet[0] = size[0]
+	packet[1] = size[1]
+	packet[2] = size[2]
+	packet[3] = size[3]
+	for i := 4; i < n; i++ {
+		packet[i] = content[i-4]
+	}
+	conn.Write(packet)
 }
 
 // []byte
