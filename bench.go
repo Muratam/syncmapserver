@@ -252,7 +252,6 @@ func TestParallelTransactionIncr(conn KeyValueStoreConn) {
 			x := 0
 			tx.Get("a", &x)
 			tx.Set("a", x+1)
-			fmt.Println(x)
 		})
 	})
 	fmt.Println(conn.IncrBy("a", 0))
@@ -363,6 +362,7 @@ var names = []string{"smMaster", "smSlave ", "redis   "}
 // var names = []string{"smMaster", "redis   "}
 // var stores = []KeyValueStoreConn{smSlave}
 // var names = []string{"smSlave "}
+
 // var stores = []KeyValueStoreConn{smMaster}
 // var names = []string{"smMaster"}
 
