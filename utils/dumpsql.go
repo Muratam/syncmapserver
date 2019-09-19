@@ -1,4 +1,5 @@
 package main
+
 // NOTE: 仮の実装.だいたい合ってると思うが適当なISUCONのでチェックしたい
 // vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv このコードを埋め込む
 import (
@@ -16,11 +17,15 @@ func loadAndDecode(path string, x interface{}) {
 	msgpack.Decode(encoded, x)
 }
 
-var x []X = func()[]X {
-	var result X[]
-	loadAndDecode("./hoge.data",&result) // NOTE: データが保存されているパスを書く
-	return result
-}()
+// NOTE: ここを適当なGoのファイルを作って書く. バイナリもGit管理すればよい
+// ID から 持ってこれると楽？ 50万件くらいなら余裕. ->
+// TODO: 50万件のデータのマイグレーション(変更されるならSyncMap/されないならオンメモリ)を書いておきたい
+
+// var x []X = func()[]X {
+// 	var result X[]
+// 	loadAndDecode("./hoge.data",&result) // NOTE: データが保存されているパスを書く
+// 	return result
+// }()
 
 // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 // xo : DB を そのままGo のコードにできるかもしれないが...
@@ -32,20 +37,20 @@ var x []X = func()[]X {
 //   1. データの様子を眺めるためにデータをGoにする
 //   2. 膨大なデータでもオンメモリにするのが大事なのでバイナリファイルに吐き出す
 func dump(db *sqlx.DB) {
-	db, _ := sql.Open("postgres", "dbname=example sslmode=disable") 	// NOTE: 接続する方法を書く
-	xs := []X{}                                     // NOTE: type X を適当な型に置き換える
-	err := dbx.Select(&xs, "SELECT * FROM `users`") // NOTE: 取りたいSQL文を書く
+	db, _ := sql.Open("postgres", "dbname=example sslmode=disable") // NOTE: 接続する方法を書く
+	xs := []X{}                                                     // NOTE: type X を適当な型に置き換える
+	err := dbx.Select(&xs, "SELECT * FROM `users`")                 // NOTE: 取りたいSQL文を書く
 	if err != nil {
 		panic(err)
 	}
-	encodeAndSave("./hoge.data",&xs)  // NOTE: 保存する名前を書く
+	encodeAndSave("./hoge.data", &xs) // NOTE: 保存する名前を書く
 }
 
 // 以下は実装用
 func main() {
 	dump()
 }
-func encodeAndSave(path string,x interface{}) {
+func encodeAndSave(path string, x interface{}) {
 	d, _ := msgpack.Encode(x)
 	file, err := os.Create(path)
 	if err != nil {

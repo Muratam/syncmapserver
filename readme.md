@@ -74,10 +74,11 @@ gob + parallel  (50並列)
 	- isok: SyncMapServerの場合は必ず成功する。/ Redis の場合は失敗するかもしれない(その場合はデータの変更が発生しない) => Commit()の直前なので Rollback()すればよい。
 	-  DB.Update() -> redis.Transaction.Set(){} -> (Commit() / RollBack())
 
-# やるだけ
-1. TODO: トランザクションの強化(テストの充実)
-1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
-1. TODO: さらにDBの中身ををGoのコードに簡単に吸い出せるようにしたい。
+# 過去のISUCONのデータから{SQL/Redis}を分析する
+1. NOTE: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
+1. NOTE: トランザクションの強化(テストの充実 / 過去のISUCON[4-9]の問題からユースケースを考える)
+1. NOTE: DBのデータをそのままバイナリにして保存し、50万件くらいならガッと読み込むやつを書いておきたい。重そうなISUCONのやつでテストする。
+1. NOTE: 実践で使ってみる。ISUCON9の予選のやつとか
 
 # 使い方
 bench.go / test/backuptest.go とかを読んだら分かるはず、Redis互換なので
