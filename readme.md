@@ -78,7 +78,6 @@ gob + parallel  (50並列)
 1. TODO: トランザクションの強化(テストの充実)
 1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
 1. TODO: さらにDBの中身ををGoのコードに簡単に吸い出せるようにしたい。
-1. TODO: BackUpの動作の検証(4000UserKeyData - )を復旧可能？
 
 # 使い方
-TODO:
+bench.go / test/backuptest.go とかを読んだら分かるはず、Redis互換なので
