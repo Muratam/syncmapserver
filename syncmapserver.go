@@ -76,7 +76,7 @@ type SyncMapServerConn struct {
 
 const NoConnectionIsSelected = -1
 
-type KeyValueStoreConnCore interface { // ptr は参照を着けてLoadすることを示す
+type KeyValueStoreConn interface { // ptr は参照を着けてLoadすることを示す
 	// Normal Command
 	Get(key string, value interface{}) bool // ptr (キーが無ければ false)
 	Set(key string, value interface{})
@@ -95,11 +95,8 @@ type KeyValueStoreConnCore interface { // ptr は参照を着けてLoadするこ
 	LSet(key string, index int, value interface{})
 	// LRange(key string, start, stop int, values []interface{}) // ptr(0,-1 で全て取得可能) TODO:
 	//  IsLocked(key string) は Redis には存在しない
-}
-
-type KeyValueStoreConn interface {
-	KeyValueStoreConnCore
-	Transaction(keys []string, f func()) (isok bool)
+	Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool)
+	TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool)
 }
 
 // 一旦 MGetResult を経由することで、重複するキーのロードを一回のロードで済ませられる
@@ -110,15 +107,15 @@ type MGetResult struct {
 // TODO: transaction中にno transactionなものが値を変えてくる可能性が十分にある
 //       特に STORE / DELETE はやっかい。だが、たいていこれらはTransactionがついているはずなのでそこまで注意をしなくてもよいのではないか
 const (
-	syncMapCommandGet    = "G"      // get
-	syncMapCommandMGet   = "MGET"   // multi get
-	syncMapCommandSet    = "S"      // set
-	syncMapCommandMSet   = "MSET"   // multi set
-	syncMapCommandExists = "EXISTS" // check if exists key
-	syncMapCommandDel    = "D"      // delete
-	syncMapCommandIncrBy = "I"      // incrBy value
-	syncMapCommandDBSize = "DBSIZE" // stored key count
-	// list (内部的に([]byte ではなく [][]byte として保存しているので) Set / Get は使えない)
+	syncMapCommandGet    = "G"    // get
+	syncMapCommandMGet   = "MGET" // multi get
+	syncMapCommandSet    = "S"    // set
+	syncMapCommandMSet   = "MSET" // multi set
+	syncMapCommandExists = "E"    // check if exists key
+	syncMapCommandDel    = "D"    // delete
+	syncMapCommandIncrBy = "I"    // incrBy value
+	syncMapCommandDBSize = "L"    // stored key count
+	// list (内部的に([]byte ではなく [][]byte として保存している))
 	// 順序が関係ないものに使うと吉
 	syncMapCommandRPush  = "RPUSH"  // append value to list(最初が空でも可能)
 	syncMapCommandLLen   = "LLEN"   // len of list
@@ -126,9 +123,9 @@ const (
 	syncMapCommandLSet   = "LSET"   // update value at index
 	// 特定のキーをLockする。
 	// それが解除されていれば、 特定のキーをロックする。
-	syncMapCommandLockKey     = "LOCK_K"   // lock a key
-	syncMapCommandUnlockKey   = "UNLOCK_K" // unlock a key
-	syncMapCommandIsLockedKey = "ISLOCKED_K"
+	syncMapCommandLockKey     = "LL" // lock a key
+	syncMapCommandUnlockKey   = "LU" // unlock a key
+	syncMapCommandIsLockedKey = "LI" // check is locked key
 	// そのほか
 	syncMapCommandFlushAll = "FLUSHALL"
 	syncMapCommandCustom   = "CUSTOM" // custom
@@ -695,15 +692,18 @@ func (this SyncMapServerConn) unlockKeys(keys []string) {
 }
 
 // TODO: キーをソートしたりロックしたりコネクションを専有したり
-func (this SyncMapServerConn) Transaction(keys []string, f func()) (isok bool) {
+func (this SyncMapServerConn) Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool) {
+	return this.TransactionWithKeys([]string{key}, f)
+}
+func (this SyncMapServerConn) TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool) {
 	if this.IsMasterServer() {
 		this.lockKeys(keys)
-		f()
+		f(this)
 		this.unlockKeys(keys)
 	} else {
 		keysEncoded := joinStrsToBytes(keys)
 		this.send(syncMapCommandLockKey, keysEncoded)
-		f()
+		f(this)
 		this.send(syncMapCommandUnlockKey, keysEncoded)
 	}
 	return true
@@ -748,24 +748,31 @@ func (this SyncMapServerConn) FlushAll() {
 }
 
 //  SyncMap で使用する関数
-func NewSyncMapServer(substanceAddress string, isMaster bool) *SyncMapServer {
-	if isMaster {
-		port, _ := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
-		result := newMasterSyncMapServer(port)
-		result.MySendCustomFunction = DefaultSendCustomFunction
-		return result
-	} else {
-		result := newSlaveSyncMapServer(substanceAddress)
-		result.MySendCustomFunction = DefaultSendCustomFunction
-		return result
-	}
-}
 func (this *SyncMapServer) GetConn() SyncMapServerConn {
 	return SyncMapServerConn{
 		server:              this,
 		connectionPoolIndex: NoConnectionIsSelected,
 	}
 }
+func NewSyncMapServerConn(substanceAddress string, isMaster bool) SyncMapServerConn {
+	if isMaster {
+		port, _ := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
+		result := newMasterSyncMapServer(port)
+		result.MySendCustomFunction = DefaultSendCustomFunction
+		return result.GetConn()
+	} else {
+		result := newSlaveSyncMapServer(substanceAddress)
+		result.MySendCustomFunction = DefaultSendCustomFunction
+		return result.GetConn()
+	}
+}
+func (this SyncMapServerConn) New() SyncMapServerConn {
+	return SyncMapServerConn{
+		server:              this.server,
+		connectionPoolIndex: NoConnectionIsSelected,
+	}
+}
+
 func (this SyncMapServer) IsMasterServer() bool {
 	return len(this.substanceAddress) == 0
 }

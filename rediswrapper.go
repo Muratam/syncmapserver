@@ -115,16 +115,16 @@ func (this RedisWrapper) LIndex(key string, index int, value interface{}) bool {
 func (this RedisWrapper) LSet(key string, index int, value interface{}) {
 	this.Redis.LSet(key, int64(index), encodeToBytes(value))
 }
-func (this RedisWrapper) GetConn() RedisWrapper {
-	return this
-}
 
-func (this RedisWrapper) Transaction(keys []string, f func()) (isok bool) {
+func (this RedisWrapper) Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool) {
+	return this.TransactionWithKeys([]string{key}, f)
+}
+func (this RedisWrapper) TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool) {
 	err := this.Redis.Watch(func(tx *redis.Tx) error {
 		_, err := tx.Pipelined(func(pipe redis.Pipeliner) error {
 			// count, err = pipe.Get("key").Int()
 			// pipe.Set("key", count+1, 0)
-			f()
+			f(this)
 			return nil
 		})
 		return err
