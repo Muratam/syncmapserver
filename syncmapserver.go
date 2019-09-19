@@ -76,7 +76,7 @@ type SyncMapServerConn struct {
 
 const NoConnectionIsSelected = -1
 
-type KeyValueStoreConn interface { // ptr は参照を着けてLoadすることを示す
+type KeyValueStoreConnCore interface { // ptr は参照を着けてLoadすることを示す
 	// Normal Command
 	Get(key string, value interface{}) bool // ptr (キーが無ければ false)
 	Set(key string, value interface{})
@@ -97,8 +97,8 @@ type KeyValueStoreConn interface { // ptr は参照を着けてLoadすること�
 	//  IsLocked(key string) は Redis には存在しない
 }
 
-type KeyValueStoreConnWithTransaction interface {
-	KeyValueStoreConn
+type KeyValueStoreConn interface {
+	KeyValueStoreConnCore
 	Transaction(keys []string, f func()) (isok bool)
 }
 
