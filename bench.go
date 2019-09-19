@@ -3,10 +3,10 @@ package main
 import (
 	"fmt"
 	"log"
-
 	"net/http"
 	_ "net/http/pprof"
 	"strconv"
+	"time"
 )
 
 func TestMasterSlaveInterpret() {
@@ -16,6 +16,8 @@ func TestMasterSlaveInterpret() {
 		smSlave.Set("k1", u)
 		var u1 User
 		smMaster.Get("k1", &u1)
+		fmt.Println(u)
+		fmt.Println(u1)
 		assert(u == u1)
 		var u2 User
 		smSlave.Get("k1", &u2)
@@ -47,12 +49,12 @@ func TestMasterSlaveInterpret() {
 }
 
 type User struct {
-	ID          int64  `json:"id" db:"id"`
-	AccountName string `json:"account_name" db:"account_name"`
-	Address     string `json:"address,omitempty" db:"address"`
-	// NumSellItems int    `json:"num_sell_items" db:"num_sell_items"`
-	// LastBump     time.Time `json:"-" db:"last_bump"`
-	// CreatedAt    time.Time `json:"-" db:"created_at"`
+	ID           int64     `json:"id" db:"id"`
+	AccountName  string    `json:"account_name" db:"account_name"`
+	Address      string    `json:"address,omitempty" db:"address"`
+	NumSellItems int       `json:"num_sell_items" db:"num_sell_items"`
+	LastBump     time.Time `json:"-" db:"last_bump"`
+	CreatedAt    time.Time `json:"-" db:"created_at"`
 }
 
 var localUserMap4000 map[string]interface{}
@@ -60,12 +62,12 @@ var keys4000 []string
 
 func randUser() User {
 	return User{
-		ID:          int64(random()),
-		AccountName: randStr(),
-		Address:     randStr(),
-		// NumSellItems: random(),
-		// LastBump:     time.Now().Truncate(time.Second),
-		// CreatedAt:    time.Now().Truncate(time.Second),
+		ID:           int64(random()),
+		AccountName:  randStr(),
+		Address:      randStr(),
+		NumSellItems: random(),
+		LastBump:     time.Now().Truncate(time.Second),
+		CreatedAt:    time.Now().Truncate(time.Second),
 	}
 }
 func InitForBenchMGetMSetUser4000() {
@@ -263,6 +265,30 @@ func BenchParallelIncryBy(conn KeyValueStoreConn) {
 	})
 	fmt.Println(conn.IncrBy("a", 0) == 49995000)
 }
+func BenchParallelUserGetSetPopular(conn KeyValueStoreConn) {
+	// 特定のキーにのみアクセス過多
+	localMap := map[string]interface{}{}
+	for i := 0; i < 400; i++ {
+		key := keys4000[i]
+		localMap[key] = localUserMap4000[key]
+	}
+	conn.MSet(localMap)
+	ExecuteImpl(10000, true, 1000, func(i int) {
+		key := keys4000[i%400]
+		n := 200
+		if i < n {
+			key = keys4000[0]
+		}
+		for !conn.Transaction(key, func(tx KeyValueStoreConn) {
+			proValue := User{}
+			tx.Get(key, &proValue)
+			preValue := localUserMap4000[key]
+			tx.Set(key, preValue)
+		}) {
+		}
+	})
+}
+
 func BenchParallelUserGetSet(conn KeyValueStoreConn) {
 	Execute(10000, true, func(i int) {
 		key := keys4000[i%4000]
@@ -283,8 +309,8 @@ func main() {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	TestMasterSlaveInterpret()
 	InitForBenchMGetMSetUser4000()
+	TestMasterSlaveInterpret()
 	t := 10
 	Test3(TestGetSetInt, t)
 	Test3(TestGetSetUser, t)
@@ -298,6 +324,7 @@ func main() {
 	Test3(BenchMGetMSetStr4000, 3)
 	Test3(BenchMGetMSetUser4000, 1)
 	Test3(BenchGetSetUser, 4000)
-	TestAverage3(BenchParallelIncryBy, 1) // NOTE: IncrBy は実装が悪いので Redisのほうがやや速い
+	TestAverage3(BenchParallelIncryBy, 1) // IncrBy は実装の都合上 Redisのほうがやや速い
+	TestAverage3(BenchParallelUserGetSetPopular, 10)
 	TestAverage3(BenchParallelUserGetSet, 1000)
 }
