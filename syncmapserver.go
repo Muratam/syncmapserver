@@ -15,8 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/golang-collections/collections/stack"
 )
 
 // 同時にリクエストされるGoroutine の数がこれに比べて多いと性能が落ちる。
@@ -58,10 +56,9 @@ type SyncMapServer struct {
 	substanceAddress string
 	masterPort       int
 	// コネクションはプールして再利用する
-	connectionPool                     [](*net.TCPConn)
-	connectionPoolStatus               []int
-	connectionPoolEmptyIndexStack      *stack.Stack
-	connectionPoolEmptyIndexStackMutex sync.Mutex
+	connectionPool             [](*net.TCPConn)
+	connectionPoolStatus       []int
+	connectionPoolEmptyChannel chan int
 	// 関数をカスタマイズする用.強引に複数台で同期したいときに便利。
 	MySendCustomFunction func(this *SyncMapServerConn, buf []byte) []byte
 }
@@ -902,9 +899,9 @@ func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	this.MySendCustomFunction = DefaultSendCustomFunction
 	this.connectionPool = make([]*net.TCPConn, maxSyncMapServerConnectionNum)
 	this.connectionPoolStatus = make([]int, maxSyncMapServerConnectionNum)
-	this.connectionPoolEmptyIndexStack = stack.New()
+	this.connectionPoolEmptyChannel = make(chan int, maxSyncMapServerConnectionNum)
 	for i := 0; i < maxSyncMapServerConnectionNum; i++ {
-		this.connectionPoolEmptyIndexStack.Push(i)
+		this.connectionPoolEmptyChannel <- i
 	}
 	// 要求があって初めて接続する。再起動試験では起動順序が一律ではないため。
 	// Redisがそういう仕組みなのでこちらもそのようにしておく
@@ -1045,31 +1042,10 @@ func (this *SyncMapServerConn) send(command string, packet ...[]byte) []byte {
 
 // トランザクション
 func (this *SyncMapServerConn) sendBySlave(command string, packet []byte, rawPacket ...[]byte) []byte {
-	findEmptyConnection := func() int {
-		if this.connectionPoolIndex != NoConnectionIsSelected {
-			return this.connectionPoolIndex
-		}
-		sleep := func() {
-			time.Sleep(1000 * time.Nanosecond)
-		}
-		for {
-			// Lock とかするまえにそもそも 0 なら望みがない
-			if this.server.connectionPoolEmptyIndexStack.Len() == 0 {
-				sleep()
-				continue
-			}
-			this.server.connectionPoolEmptyIndexStackMutex.Lock()
-			if this.server.connectionPoolEmptyIndexStack.Len() == 0 {
-				this.server.connectionPoolEmptyIndexStackMutex.Unlock()
-				sleep()
-				continue
-			}
-			result := this.server.connectionPoolEmptyIndexStack.Pop().(int)
-			this.server.connectionPoolEmptyIndexStackMutex.Unlock()
-			return result
-		}
+	poolIndex := this.connectionPoolIndex
+	if poolIndex == NoConnectionIsSelected {
+		poolIndex = <-this.server.connectionPoolEmptyChannel
 	}
-	poolIndex := findEmptyConnection()
 	poolStatus := this.server.connectionPoolStatus[poolIndex]
 	conn := this.server.connectionPool[poolIndex]
 	if poolStatus == ConnectionPoolStatusDisconnected {
@@ -1110,8 +1086,6 @@ func (this *SyncMapServerConn) sendBySlave(command string, packet []byte, rawPac
 		// ロック中は他の人にあげない
 		return result
 	}
-	this.server.connectionPoolEmptyIndexStackMutex.Lock()
-	this.server.connectionPoolEmptyIndexStack.Push(poolIndex)
-	this.server.connectionPoolEmptyIndexStackMutex.Unlock()
+	this.server.connectionPoolEmptyChannel <- poolIndex
 	return result
 }

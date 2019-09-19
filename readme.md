@@ -75,9 +75,9 @@ gob + parallel  (50並列)
 
 # やるだけ
 
-1. トランザクションの強化(テストの充実 / Lock Waiting Connection の削減 => lock key 情報を持っておきchannelかgoroutineかsleep))
+1. TODO: トランザクションの強化(テストの充実 / Lock Waiting Connection の削減 => lock key 情報を持っておきchannelかgoroutineかsleep) / 種類が多い時に有効ではないか)
 1. TODO: Redis BackUp
-
+1. TODO: list の速度検証 -> LRange / LPop / RPop
 1. TODO: codegen が対応できないデータ型が多い
 1. NOTE: 高速化 sbytes(s string) []byte
 1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
