@@ -135,9 +135,7 @@ const (
 	// NOTE: LIST_GET_ALL 欲しい？
 )
 
-// bytes utils //////////////////////////////////////////
-// 20000Byteを超える際の Linux上での調子が悪いので、
-// 先にContent-Lengthを32bit(4Byte)指定して読み込ませている
+// bytes utils // Connection Pool のために Contents長さを指定する変換が入る
 func parse32bit(input []byte) int {
 	result := 0
 	result += int(input[0])
@@ -224,32 +222,7 @@ func writeAll(conn net.Conn, content []byte) {
 // <-> [][]byte    :: join           <-> split
 // <-> []string    :: joinStrsToBytes <-> splitBytesToStrs
 // <-> string      :: byte[]()       <-> string()
-// type MarshalUnmarshalForSpeedUp interface {
-// 	MarshalB(buf []byte) ([]byte, error)
-// 	UnmarshalB(buf []byte) (uint64, error)
-// }
-func MarshalString(this string) []byte {
-	return []byte(this)
-}
-func UnmarshalString(this *string, x []byte) {
-	(*this) = string(x)
-}
-func encodeToBytes(x interface{}) []byte {
-	// if p, ok := x.(User); ok {
-	// 	byf, _ := p.Marshal([]byte{})
-	// 	return byf
-	// }
-	if p, ok := x.(string); ok {
-		return MarshalString(p)
-	}
-	var buf bytes.Buffer
-	err := gob.NewEncoder(&buf).Encode(x)
-	if err != nil {
-		panic(err)
-	}
-	return buf.Bytes()
-}
-
+//
 // 変更できるようにpointer型で受け取ること
 func decodeFromBytes(input []byte, x interface{}) {
 	// if p, ok := x.(*User); ok {
@@ -267,6 +240,27 @@ func decodeFromBytes(input []byte, x interface{}) {
 	if err != nil {
 		log.Panic(err)
 	}
+}
+func encodeToBytes(x interface{}) []byte {
+	// if p, ok := x.(User); ok {
+	// 	byf, _ := p.Marshal([]byte{})
+	// 	return byf
+	// }
+	if p, ok := x.(string); ok {
+		return MarshalString(p)
+	}
+	var buf bytes.Buffer
+	err := gob.NewEncoder(&buf).Encode(x)
+	if err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+func MarshalString(this string) []byte {
+	return []byte(this)
+}
+func UnmarshalString(this *string, x []byte) {
+	(*this) = string(x)
 }
 func join(input [][]byte) []byte {
 	// 要素数 4B (32bit)
@@ -415,7 +409,7 @@ func (this SyncMapServerConn) parseGet(input [][]byte) []byte {
 	if ok {
 		return value.([]byte)
 	}
-	return []byte{}
+	return []byte("")
 }
 
 // SET
@@ -754,7 +748,7 @@ func (this SyncMapServerConn) FlushAll() {
 }
 
 //  SyncMap で使用する関数
-func NewSyncMapServer(substanceAddress string, isMaster bool) SyncMapServer {
+func NewSyncMapServer(substanceAddress string, isMaster bool) *SyncMapServer {
 	if isMaster {
 		port, _ := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
 		result := newMasterSyncMapServer(port)
@@ -766,9 +760,9 @@ func NewSyncMapServer(substanceAddress string, isMaster bool) SyncMapServer {
 		return result
 	}
 }
-func (this SyncMapServer) GetConn() SyncMapServerConn {
+func (this *SyncMapServer) GetConn() SyncMapServerConn {
 	return SyncMapServerConn{
-		server:              &this,
+		server:              this,
 		connectionPoolIndex: NoConnectionIsSelected,
 	}
 }
@@ -781,7 +775,7 @@ func (this SyncMapServerConn) IsMasterServer() bool {
 func (this SyncMapServerConn) IsNowTransaction() bool {
 	return len(this.lockedKeys) > 0
 }
-func newMasterSyncMapServer(port int) SyncMapServer {
+func newMasterSyncMapServer(port int) *SyncMapServer {
 	this := SyncMapServer{}
 	this.substanceAddress = ""
 	this.masterPort = port
@@ -795,13 +789,13 @@ func newMasterSyncMapServer(port int) SyncMapServer {
 		if err != nil {
 			panic(err)
 		}
+		serverConn := this.GetConn()
 		for {
 			conn, err := listen.AcceptTCP()
 			if err != nil {
 				fmt.Println("Server:", err)
 				continue
 			}
-			serverConn := this.GetConn()
 			go func() {
 				for {
 					writeAll(conn, serverConn.interpretWrapFunction(readAll(conn)))
@@ -819,9 +813,9 @@ func newMasterSyncMapServer(port int) SyncMapServer {
 	this.readFile()
 	// バックアッププロセスを開始する
 	this.startBackUpProcess()
-	return this
+	return &this
 }
-func newSlaveSyncMapServer(substanceAddress string) SyncMapServer {
+func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	this := SyncMapServer{}
 	this.substanceAddress = substanceAddress
 	port, err := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
@@ -831,15 +825,15 @@ func newSlaveSyncMapServer(substanceAddress string) SyncMapServer {
 	this.masterPort = port
 	this.MySendCustomFunction = DefaultSendCustomFunction
 	// WARN: Transaction時は強引に作成するので想定数よりも増えるので多めに確保
-	this.connectionPool = make([]*net.TCPConn, maxSyncMapServerConnectionNum*10)
-	this.connectionPoolStatus = make([]int, maxSyncMapServerConnectionNum*10)
+	this.connectionPool = make([]*net.TCPConn, maxSyncMapServerConnectionNum)
+	this.connectionPoolStatus = make([]int, maxSyncMapServerConnectionNum)
 	this.connectionPoolEmptyIndexStack = stack.New()
 	for i := 0; i < maxSyncMapServerConnectionNum; i++ {
 		this.connectionPoolEmptyIndexStack.Push(i)
 	}
 	// 要求があって初めて接続する。再起動試験では起動順序が一律ではないため。
 	// Redisがそういう仕組みなのでこちらもそのようにしておく
-	return this
+	return &this
 }
 func (this SyncMapServer) getPath() string {
 	return SyncMapBackUpPath + strconv.Itoa(this.masterPort) + ".sm"
@@ -963,33 +957,32 @@ func (this SyncMapServerConn) send(command string, packet ...[]byte) []byte {
 
 // TODO: トランザクション
 func (this SyncMapServerConn) sendBySlave(packet []byte) []byte {
-	server := this.server
 	findEmptyConnection := func() int {
 		sleep := func() {
 			time.Sleep(500 * time.Nanosecond)
 		}
 		for {
 			// Lock とかするまえにそもそも 0 なら望みがない
-			if server.connectionPoolEmptyIndexStack.Len() == 0 {
+			if this.server.connectionPoolEmptyIndexStack.Len() == 0 {
 				sleep()
 				continue
 			}
-			server.connectionPoolEmptyIndexStackMutex.Lock()
-			if server.connectionPoolEmptyIndexStack.Len() == 0 {
-				server.connectionPoolEmptyIndexStackMutex.Unlock()
+			this.server.connectionPoolEmptyIndexStackMutex.Lock()
+			if this.server.connectionPoolEmptyIndexStack.Len() == 0 {
+				this.server.connectionPoolEmptyIndexStackMutex.Unlock()
 				sleep()
 				continue
 			}
-			result := server.connectionPoolEmptyIndexStack.Pop().(int)
-			server.connectionPoolEmptyIndexStackMutex.Unlock()
+			result := this.server.connectionPoolEmptyIndexStack.Pop().(int)
+			this.server.connectionPoolEmptyIndexStackMutex.Unlock()
 			return result
 		}
 	}
 	poolIndex := findEmptyConnection()
-	poolStatus := server.connectionPoolStatus[poolIndex]
-	conn := server.connectionPool[poolIndex]
+	poolStatus := this.server.connectionPoolStatus[poolIndex]
+	conn := this.server.connectionPool[poolIndex]
 	if poolStatus == ConnectionPoolStatusDisconnected {
-		tcpAddr, err := net.ResolveTCPAddr("tcp4", server.substanceAddress)
+		tcpAddr, err := net.ResolveTCPAddr("tcp4", this.server.substanceAddress)
 		if err != nil {
 			log.Panic("net resolve TCP Addr error ", err)
 		}
@@ -1000,7 +993,7 @@ func (this SyncMapServerConn) sendBySlave(packet []byte) []byte {
 				newConn.Close()
 			}
 			time.Sleep(1 * time.Millisecond)
-			server.connectionPoolStatus[poolIndex] = ConnectionPoolStatusDisconnected
+			this.server.connectionPoolStatus[poolIndex] = ConnectionPoolStatusDisconnected
 			return this.sendBySlave(packet)
 		}
 		// NOTE: できるなら永遠に接続したい
@@ -1011,10 +1004,10 @@ func (this SyncMapServerConn) sendBySlave(packet []byte) []byte {
 	}
 	writeAll(conn, packet)
 	result := readAll(conn)
-	server.connectionPool[poolIndex] = conn
-	server.connectionPoolStatus[poolIndex] = ConnectionPoolStatusEmpty
-	server.connectionPoolEmptyIndexStackMutex.Lock()
-	server.connectionPoolEmptyIndexStack.Push(poolIndex)
-	server.connectionPoolEmptyIndexStackMutex.Unlock()
+	this.server.connectionPool[poolIndex] = conn
+	this.server.connectionPoolStatus[poolIndex] = ConnectionPoolStatusEmpty
+	this.server.connectionPoolEmptyIndexStackMutex.Lock()
+	this.server.connectionPoolEmptyIndexStack.Push(poolIndex)
+	this.server.connectionPoolEmptyIndexStackMutex.Unlock()
 	return result
 }

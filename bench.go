@@ -310,7 +310,6 @@ func BenchParallelUserGetSet(store KeyValueStoreConnWithTransaction) {
 // List Push の速度 (use ptr ?)
 // Lock を解除したい(RPush / LSet)
 // Transactionをチェックしたい
-// go func を可能に
 
 func Test3(f func(store KeyValueStoreConnWithTransaction), times int) (milliSecs []int64) {
 	rand.Seed(time.Now().UnixNano())
@@ -340,9 +339,12 @@ func TestAverage3(f func(store KeyValueStoreConnWithTransaction), times int) {
 }
 
 // NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) のように ISUCON本本では使う
-var smMaster = NewSyncMapServer("127.0.0.1:8080", true).GetConn()
-var smSlave = NewSyncMapServer("127.0.0.1:8080", false).GetConn()
-var redisWrap = NewRedisWrapper("127.0.0.1:6379")
+var smMasterInstance = NewSyncMapServer("127.0.0.1:8080", true)
+var smSlaveInstance = NewSyncMapServer("127.0.0.1:8080", false)
+var redisWrapInstance = NewRedisWrapper("127.0.0.1:6379")
+var smMaster = smMasterInstance.GetConn()
+var smSlave = smSlaveInstance.GetConn()
+var redisWrap = redisWrapInstance.GetConn()
 
 var stores = []KeyValueStoreConnWithTransaction{smMaster, smSlave, redisWrap}
 var names = []string{"smMaster", "smSlave ", "redis   "}
@@ -372,6 +374,6 @@ func main() {
 	Test3(BenchMGetMSetStr4000, 3)
 	Test3(BenchMGetMSetUser4000, 1)
 	Test3(BenchGetSetUser, 4000)
-	// TestAverage3(BenchParallelIncryBy, 1) // NOTE: IncrBy は実装が悪いので Redisのほうがやや速い
+	TestAverage3(BenchParallelIncryBy, 1) // NOTE: IncrBy は実装が悪いので Redisのほうがやや速い
 	TestAverage3(BenchParallelUserGetSet, 1000)
 }

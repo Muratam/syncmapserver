@@ -115,6 +115,9 @@ func (this RedisWrapper) LIndex(key string, index int, value interface{}) bool {
 func (this RedisWrapper) LSet(key string, index int, value interface{}) {
 	this.Redis.LSet(key, int64(index), encodeToBytes(value))
 }
+func (this RedisWrapper) GetConn() RedisWrapper {
+	return this
+}
 
 func (this RedisWrapper) Transaction(keys []string, f func()) (isok bool) {
 	err := this.Redis.Watch(func(tx *redis.Tx) error {
