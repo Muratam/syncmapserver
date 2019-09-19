@@ -257,7 +257,7 @@ func TestParallelTransactionIncr(conn KeyValueStoreConn) {
 		}) {
 		}
 	})
-	fmt.Println(conn.IncrBy("a", 0))
+	assert(conn.IncrBy("a", 0) == 25000)
 }
 
 var localUserMap4000 map[string]interface{}
@@ -368,27 +368,26 @@ var names = []string{"smMaster", "smSlave ", "redis   "}
 
 // var stores = []KeyValueStoreConn{smMaster}
 // var names = []string{"smMaster"}
-// TODO: [GET] / [SET] WARNING
 
 func main() {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	// InitForBenchMGetMSetUser4000()
-	// t := 10
-	// Test3(TestGetSetInt, t)
-	// Test3(TestGetSetUser, t)
-	// Test3(TestIncrBy, t)
-	// Test3(TestKeyCount, t)
-	// Test3(TestMGetMSetString, 1)
-	// Test3(TestMGetMSetUser, 1)
-	// Test3(TestMGetMSetInt, 1)
+	InitForBenchMGetMSetUser4000()
+	t := 10
+	Test3(TestGetSetInt, t)
+	Test3(TestGetSetUser, t)
+	Test3(TestIncrBy, t)
+	Test3(TestKeyCount, t)
+	Test3(TestMGetMSetString, 1)
+	Test3(TestMGetMSetUser, 1)
+	Test3(TestMGetMSetInt, 1)
 	Test3(TestParallelTransactionIncr, 1)
-	// TestMasterSlaveInterpret()
-	// fmt.Println("-----------BENCH----------")
-	// Test3(BenchMGetMSetStr4000, 3)
-	// Test3(BenchMGetMSetUser4000, 1)
-	// Test3(BenchGetSetUser, 4000)
-	// TestAverage3(BenchParallelIncryBy, 1) // NOTE: IncrBy は実装が悪いので Redisのほうがやや速い
-	// TestAverage3(BenchParallelUserGetSet, 1000)
+	TestMasterSlaveInterpret()
+	fmt.Println("-----------BENCH----------")
+	Test3(BenchMGetMSetStr4000, 3)
+	Test3(BenchMGetMSetUser4000, 1)
+	Test3(BenchGetSetUser, 4000)
+	TestAverage3(BenchParallelIncryBy, 1) // NOTE: IncrBy は実装が悪いので Redisのほうがやや速い
+	TestAverage3(BenchParallelUserGetSet, 1000)
 }

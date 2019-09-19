@@ -4,17 +4,18 @@ package main
 // どうせシリアライズする必要があるので、 int 値以外は全て[]byteにしている。
 //  (int値は IncrByの都合上そのまま置く必要があるので[]byteにしていない)
 import (
+	"log"
 	"strconv"
 
 	"github.com/go-redis/redis"
 )
 
-// TODO: BackUp
 
 type RedisWrapper struct {
-	Redis *redis.Client
-	tx    *redis.Tx
-	pipe  *redis.Pipeliner
+	Redis        *redis.Client
+	tx           *redis.Tx
+	pipe         *redis.Pipeliner
+	isAlreadySet bool // Transaction時に既に変更を加えるコマンドを行ったか
 }
 
 func NewRedisWrapper(address string) *RedisWrapper {
@@ -24,23 +25,40 @@ func NewRedisWrapper(address string) *RedisWrapper {
 			Password: "", // no password set
 			DB:       0,  // use default DB
 		}),
-		tx:   nil,
-		pipe: nil,
+		tx:           nil,
+		pipe:         nil,
+		isAlreadySet: false,
 	}
 }
 func (this *RedisWrapper) New() *RedisWrapper {
 	return &RedisWrapper{
-		Redis: this.Redis,
-		tx:    nil,
-		pipe:  nil,
+		Redis:        this.Redis,
+		tx:           nil,
+		pipe:         nil,
+		isAlreadySet: false,
 	}
 }
 func (this *RedisWrapper) IsTransactionNow() bool {
 	return this.tx != nil && this.pipe != nil
 }
+func (this *RedisWrapper) CheckNotSet() {
+	if !this.IsTransactionNow() {
+		return
+	}
+	if this.isAlreadySet {
+		log.Panic("値を変更するコマンドが既に実行されています")
+	}
+}
+func (this *RedisWrapper) SetSet() {
+	if !this.IsTransactionNow() {
+		return
+	}
+	this.isAlreadySet = true
+}
 
 // General Commands
 func (this *RedisWrapper) Get(key string, value interface{}) bool {
+	this.CheckNotSet()
 	var got *redis.StringCmd
 	if this.IsTransactionNow() {
 		got = this.tx.Get(key)
@@ -59,27 +77,26 @@ func (this *RedisWrapper) Get(key string, value interface{}) bool {
 	return true
 }
 func (this *RedisWrapper) Set(key string, value interface{}) {
-	if valueInt, ok := value.(int); ok {
-		if this.IsTransactionNow() {
-			(*this.pipe).Set(key, valueInt, 0)
-		} else {
-			this.Redis.Set(key, valueInt, 0)
-		}
-		return
+	this.SetSet()
+	if _, ok := value.(int); !ok {
+		value = encodeToBytes(value)
 	}
-	bs := encodeToBytes(value)
 	if this.IsTransactionNow() {
-		(*this.pipe).Set(key, bs, 0)
+		(*this.pipe).Set(key, value, 0)
 	} else {
-		this.Redis.Set(key, bs, 0)
+		this.Redis.Set(key, value, 0)
 	}
 }
 func (this *RedisWrapper) MGet(keys []string) MGetResult {
-	// TODO: int64
-	loads := this.Redis.MGet(keys...).Val()
+	this.CheckNotSet()
+	var loads []interface{}
+	if this.IsTransactionNow() {
+		loads = this.tx.MGet(keys...).Val()
+	} else {
+		loads = this.Redis.MGet(keys...).Val()
+	}
 	result := newMGetResult()
 	for i, load := range loads {
-		// intならDecodingしておく
 		if load == nil { // キーが存在しない
 			continue
 		}
@@ -95,6 +112,7 @@ func (this *RedisWrapper) MGet(keys []string) MGetResult {
 	return result
 }
 func (this *RedisWrapper) MSet(store map[string]interface{}) {
+	this.SetSet()
 	var pairs []interface{}
 	for key, value := range store {
 		if valueInt, ok := value.(int); ok {
@@ -104,35 +122,83 @@ func (this *RedisWrapper) MSet(store map[string]interface{}) {
 		bs := encodeToBytes(value)
 		pairs = append(pairs, key, bs)
 	}
-	this.Redis.MSet(pairs...)
+	if this.IsTransactionNow() {
+		(*this.pipe).MSet(pairs...)
+	} else {
+		this.Redis.MSet(pairs...)
+	}
 }
 func (this *RedisWrapper) Exists(key string) bool {
-	return this.Redis.Exists(key).Val() == 1
+	this.CheckNotSet()
+	if this.IsTransactionNow() {
+		return this.tx.Exists(key).Val() == 1
+	} else {
+		return this.Redis.Exists(key).Val() == 1
+	}
 }
 func (this *RedisWrapper) Del(key string) {
-	this.Redis.Del(key)
+	this.SetSet()
+	if this.IsTransactionNow() {
+		(*this.pipe).Del(key)
+	} else {
+		this.Redis.Del(key)
+	}
 }
 func (this *RedisWrapper) IncrBy(key string, value int) int {
-	return int(this.Redis.IncrBy(key, int64(value)).Val())
+	this.SetSet()
+	if this.IsTransactionNow() {
+		return int((*this.pipe).IncrBy(key, int64(value)).Val())
+	} else {
+		return int(this.Redis.IncrBy(key, int64(value)).Val())
+	}
 }
 func (this *RedisWrapper) DBSize() int {
-	return int(this.Redis.DBSize().Val())
+	this.CheckNotSet()
+	if this.IsTransactionNow() {
+		return int(this.tx.DBSize().Val())
+	} else {
+		return int(this.Redis.DBSize().Val())
+	}
 }
 func (this *RedisWrapper) FlushAll() {
-	this.Redis.FlushAll()
+	this.SetSet()
+	if this.IsTransactionNow() {
+		(*this.pipe).FlushAll()
+	} else {
+		this.Redis.FlushAll()
+	}
 }
 
 // List 系は全て Encode して保存(intも)
 func (this *RedisWrapper) RPush(key string, value interface{}) int {
-	size := this.Redis.RPush(key, encodeToBytes(value)).Val()
+	this.SetSet()
+	var size int64
+	if this.IsTransactionNow() {
+		size = (*this.pipe).RPush(key, encodeToBytes(value)).Val()
+	} else {
+		size = this.Redis.RPush(key, encodeToBytes(value)).Val()
+	}
 	return int(size) - 1
 }
 func (this *RedisWrapper) LLen(key string) int {
-	size := this.Redis.LLen(key).Val()
+	this.CheckNotSet()
+	var size int64
+	if this.IsTransactionNow() {
+		size = this.tx.LLen(key).Val()
+	} else {
+		size = this.Redis.LLen(key).Val()
+	}
 	return int(size) - 1
 }
 func (this *RedisWrapper) LIndex(key string, index int, value interface{}) bool {
-	loads, err := this.Redis.LIndex(key, int64(index)).Result()
+	this.CheckNotSet()
+	var res *redis.StringCmd
+	if this.IsTransactionNow() {
+		res = this.tx.LIndex(key, int64(index))
+	} else {
+		res = this.Redis.LIndex(key, int64(index))
+	}
+	loads, err := res.Result()
 	if err != nil {
 		return false
 	}
@@ -140,13 +206,21 @@ func (this *RedisWrapper) LIndex(key string, index int, value interface{}) bool 
 	return true
 }
 func (this *RedisWrapper) LSet(key string, index int, value interface{}) {
-	this.Redis.LSet(key, int64(index), encodeToBytes(value))
+	this.SetSet()
+	if this.IsTransactionNow() {
+		(*this.pipe).LSet(key, int64(index), encodeToBytes(value))
+	} else {
+		this.Redis.LSet(key, int64(index), encodeToBytes(value))
+	}
 }
 
 func (this *RedisWrapper) Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool) {
 	return this.TransactionWithKeys([]string{key}, f)
 }
 func (this *RedisWrapper) TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool) {
+	if this.IsTransactionNow() {
+		log.Panic("Transaction in Transacion Error")
+	}
 	err := this.Redis.Watch(func(tx *redis.Tx) error {
 		_, err := tx.Pipelined(func(pipe redis.Pipeliner) error {
 			conn := this.New()

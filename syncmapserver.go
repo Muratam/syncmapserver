@@ -95,7 +95,7 @@ type KeyValueStoreConn interface { // ptr は参照を着けてLoadすること�
 	LIndex(key string, index int, value interface{}) bool // ptr (キーが無ければ false)
 	LSet(key string, index int, value interface{})
 	// LRange(key string, start, stop int, values []interface{}) // ptr(0,-1 で全て取得可能) TODO:
-	//  IsLocked(key string) は Redis には存在しない
+	// IsLocked(key string) は Redis には存在しない
 	Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool)
 	TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool)
 }
@@ -105,8 +105,6 @@ type MGetResult struct {
 	resultMap map[string][]byte
 }
 
-// TODO: transaction中にno transactionなものが値を変えてくる可能性が十分にある
-//       特に STORE / DELETE はやっかい。だが、たいていこれらはTransactionがついているはずなのでそこまで注意をしなくてもよいのではないか
 const (
 	syncMapCommandGet    = "G"    // get
 	syncMapCommandMGet   = "MGET" // multi get
@@ -163,10 +161,8 @@ func readAll(conn net.Conn) []byte {
 		readBufNum, err := conn.Read(buf)
 		if readBufNum != 4 {
 			if readBufNum == 0 {
-				// WARN:
 				return readAll(conn)
 			} else {
-				// WARN
 				log.Panic("too short buf : ", readBufNum)
 			}
 		}
@@ -324,7 +320,7 @@ func splitBytesToStrs(input []byte) []string {
 }
 func sbytes(s string) []byte {
 	return []byte(s)
-	// NOTE: かなり　unsafe なやりかたなので落ちるかもしれないが高速化可能
+	// NOTE: かなりunsafe なやりかたなので落ちるかもしれないがbyteの変換は更に高速化可能
 	// return *(*[]byte)(unsafe.Pointer(&s))
 }
 func decodeBool(input []byte) bool {
@@ -840,7 +836,6 @@ func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	}
 	this.masterPort = port
 	this.MySendCustomFunction = DefaultSendCustomFunction
-	// WARN: Transaction時は強引に作成するので想定数よりも増えるので多めに確保
 	this.connectionPool = make([]*net.TCPConn, maxSyncMapServerConnectionNum)
 	this.connectionPoolStatus = make([]int, maxSyncMapServerConnectionNum)
 	this.connectionPoolEmptyIndexStack = stack.New()
@@ -1029,11 +1024,11 @@ func (this *SyncMapServerConn) sendBySlave(command string, packet []byte, rawPac
 		// ロック開始 => conn に connectionPoolIndex を設定
 		this.connectionPoolIndex = poolIndex
 		this.lockedKeys = splitBytesToStrs(rawPacket[0])
-		// TODO: ロックしているキーを保存
 		return result
 	} else if command == syncMapCommandUnlockKey {
 		// ロック終了 => conn の connectionPoolIndex を空に設定
 		this.connectionPoolIndex = NoConnectionIsSelected
+		this.lockedKeys = []string{}
 	} else if len(this.lockedKeys) > 0 {
 		// ロック中は他の人にあげない
 		return result

@@ -4,8 +4,9 @@
 - ISUCONに特化した最適化をすることで、すごい速度を実現。
 - Master と Slave に分かれており、Masterを動かしているGoアプリはTCPを経由せずにデータを扱える。
 - キーバリューストア型のDB。
-- 同梱のRedisWrapperも KeyValueStore interface を持っているので一瞬で切り替えることが可能、もしものときにも安心。
-
+- 同梱のRedisWrapperも KeyValueStore interface を持っているので一瞬で切り替えることが可能。状況に応じて使い分けやすい。
+- きちんとロックする。楽観ロックではない。
+  - IsLocked() コマンドが使える。
 
 ## Redis並の速度が出る
 - Goアプリ上で動かすので速い
@@ -20,36 +21,16 @@
 - 大量のデータの初期化が速い
   - Redisは一括で送信しないと莫大な時間がかかるが、こちらはMasterサーバーで初期化することでオーバーヘッドなしに初期化できる。
 
-# Redis の主要な機能が使える
+## Redis の主要な機能が使える
 - トランザクション(Lock / Unlock)が可能
   - 全体をロックする他に、個別のキーだけをロックすることも可能。
-    - TODO: 一人がロック中に他の人が書き換えられるのは注意.
   - キー毎にロックされているかをトランザクション開始前に確認可能
 - list(=保存順序を気にしないデータの配列) も扱える
 - 全てのキーの要素数も確認可能
 - MULTIGET / MULTISET があるので N+1問題にも対応可能
 
 
-# やるだけ
-1. 複数のコネクション / トランザクションに対応。(現在は一度接続したら離れないので)
-  - TCPConnに変えるとメソッドがもっと生える
-1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
-1. TODO: さらにさらにGoのコードにSQLを変換したい。
-1. TODO:
-  - 一つのキーに保存された list の 全てを一括取得も実装しておきたい
-  - 本家は RPush が一度に複数送信できるっぽい
-1. TODO: codegen が対応できないデータ型が多い
-1. 別のDBがあるといちいち別のやつを建てる必要があるが、それは損
-
-# ISUCONでの使用時のヒント
-- https://github.com/Muratam/isucon9q/blob/nouser/postapi.go
-  - DBからのSQLでの読み込み は initializeUsersDB()
-  - 特定のキーのみのロック(+1人目のトランザクションが成功したら終了) は postBuy()
-  - 要求があってから初めて接続を開始するので複数台でも起動順序は問われない。
-
-
-
-# ベンチマークと動作テスト
+## ベンチマークと動作テスト
 
 - syncmap / rediswrapper の速度の比較と動作テスト keyvaluestore.go でしています
 - User struct を作り、それをむちゃくちゃな回数 Get / Set しまくるコード
@@ -72,9 +53,14 @@ gob + parallel  (50並列)
 - Masterサーバーの操作は速い。オーバーヘッドがないから当然。
 - エンコード・デコードにかなり時間がかかる。可能なら手間だが codegen を使うべき。
 - 並列にすると速い。 Redis の速度と Slave の速度はほぼ同じになる。
-  - これは予想通り。SyncMapServerの良点は1台分TCPしなくてよいところなので
-- NOTE: 並列数が増えると現在自動ではスケールしない。100並列くらいならよいがもっとくると大変かも。
+  - これは予想通り。SyncMapServerの良点は1台分がTCPしなくてよいところなので
 
+
+# ISUCONでの使用時のヒント
+- https://github.com/Muratam/isucon9q/blob/nouser/postapi.go
+  - DBからのSQLでの読み込み は initializeUsersDB()
+  - 特定のキーのみのロック(+1人目のトランザクションが成功したら終了) は postBuy()
+  - 要求があってから初めて接続を開始するので複数台でも起動順序は問われない。
 
 # DBと併用する際のトランザクションのメモ
 - ロールバックはサポートされない。
@@ -83,6 +69,18 @@ gob + parallel  (50並列)
 - SyncMapServer は通常どおりのロック. 長く専有しているものがあると大変だがそもそも直列操作なので仕方ない。
 - keys は中でソートされるので、(DAGができるので)デッドロックは発生しないはず。
 - Redis は楽観ロックなので,この中の関数が楽観ロックに失敗した場合に成功するまで実行され続けることに注意。
-- NOTE: Set 系操作の後に Get 系操作があったらエラーを出す。
+- Redis版では Set 系操作の後に Get 系操作があったらエラーがでるようになってる。
 	- isok: SyncMapServerの場合は必ず成功する。/ Redis の場合は失敗するかもしれない(その場合はデータの変更が発生しない) => Commit()の直前なので Rollback()すればよい。
 	-  DB.Update() -> redis.Transaction.Set(){} -> (Commit() / RollBack())
+
+# やるだけ
+1. トランザクションの強化(テストの充実 / Lock Waiting Connection の削減))
+1. TODO: Redis BackUp
+1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
+1. TODO: さらにさらにGoのコードにSQLを変換したい。
+1. TODO: 一人がロック中に他の人が書き換えられるのは注意.
+    - 一つのキーに保存された list の 全てを一括取得も実装しておきたい(keys command / LRange)
+    - 本家は RPush が一度に複数送信できるっぽい
+1. 自動スケールしたい (maxSyncMapServerConnectionNumに対して多すぎるとつらい)
+1. TODO: codegen が対応できないデータ型が多い
+1. sbytes(s string) []byte
