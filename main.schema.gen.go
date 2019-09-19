@@ -123,7 +123,6 @@ func (d *User) Marshal(buf []byte) ([]byte, error) {
 	}
 	return buf[:i+8], nil
 }
-
 func (d *User) Unmarshal(buf []byte) (uint64, error) {
 	i := uint64(0)
 

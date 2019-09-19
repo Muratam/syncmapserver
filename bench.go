@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-
 	"net/http"
 	_ "net/http/pprof"
 	"strconv"
@@ -263,6 +262,30 @@ func BenchParallelIncryBy(conn KeyValueStoreConn) {
 	})
 	fmt.Println(conn.IncrBy("a", 0) == 49995000)
 }
+func BenchParallelUserGetSetPopular(conn KeyValueStoreConn) {
+	// 特定のキーにのみアクセス過多
+	localMap := map[string]interface{}{}
+	for i := 0; i < 400; i++ {
+		key := keys4000[i]
+		localMap[key] = localUserMap4000[key]
+	}
+	conn.MSet(localMap)
+	ExecuteImpl(10000, true, 1000, func(i int) {
+		key := keys4000[i%400]
+		n := 200
+		if i < n {
+			key = keys4000[0]
+		}
+		for !conn.Transaction(key, func(tx KeyValueStoreConn) {
+			proValue := User{}
+			tx.Get(key, &proValue)
+			preValue := localUserMap4000[key]
+			tx.Set(key, preValue)
+		}) {
+		}
+	})
+}
+
 func BenchParallelUserGetSet(conn KeyValueStoreConn) {
 	Execute(10000, true, func(i int) {
 		key := keys4000[i%4000]
@@ -283,21 +306,23 @@ func main() {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	TestMasterSlaveInterpret()
+	// TestMasterSlaveInterpret()
+	// gob.Register(User{})
 	InitForBenchMGetMSetUser4000()
-	t := 10
-	Test3(TestGetSetInt, t)
-	Test3(TestGetSetUser, t)
-	Test3(TestIncrBy, t)
-	Test3(TestKeyCount, t)
-	Test3(TestMGetMSetString, 1)
-	Test3(TestMGetMSetUser, 1)
-	Test3(TestMGetMSetInt, 1)
-	Test3(TestParallelTransactionIncr, 1)
-	fmt.Println("-----------BENCH----------")
-	Test3(BenchMGetMSetStr4000, 3)
-	Test3(BenchMGetMSetUser4000, 1)
-	Test3(BenchGetSetUser, 4000)
-	TestAverage3(BenchParallelIncryBy, 1) // NOTE: IncrBy は実装が悪いので Redisのほうがやや速い
-	TestAverage3(BenchParallelUserGetSet, 1000)
+	// t := 10
+	// Test3(TestGetSetInt, t)
+	// Test3(TestGetSetUser, t)
+	// Test3(TestIncrBy, t)
+	// Test3(TestKeyCount, t)
+	// Test3(TestMGetMSetString, 1)
+	// Test3(TestMGetMSetUser, 1)
+	// Test3(TestMGetMSetInt, 1)
+	// Test3(TestParallelTransactionIncr, 1)
+	// fmt.Println("-----------BENCH----------")
+	// Test3(BenchMGetMSetStr4000, 3)
+	// Test3(BenchMGetMSetUser4000, 1)
+	// Test3(BenchGetSetUser, 4000)
+	// TestAverage3(BenchParallelIncryBy, 1) // IncrBy は実装の都合上 Redisのほうがやや速い
+	TestAverage3(BenchParallelUserGetSetPopular, 10)
+	// TestAverage3(BenchParallelUserGetSet, 1000)
 }
