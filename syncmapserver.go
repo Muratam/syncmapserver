@@ -26,6 +26,8 @@ const RedisHostPrivateIPAddress = "192.168.111.111" // ここで指定したサ�
 // `NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
 const SyncMapBackUpPath = "./syncmapbackup-" // カレントディレクトリにバックアップを作成。パーミッションに注意。
 const DefaultBackUpTimeSecond = 30           // この秒数毎にバックアップファイルを作成する(デフォルトでBackUpが作成される設定)
+// 一人がロック中に他のロックしていない人が値を書き換えることができる。
+//   これは整合性が必要なデータかつ不必要なデータということになるので、そんなことは起こらないはず
 
 func MyServerIsOnMasterServerIP() bool {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
@@ -367,6 +369,8 @@ func (this *SyncMapServerConn) interpretWrapFunction(buf []byte) []byte {
 	// List Command
 	case syncMapCommandRPush:
 		return this.parseRPush(input)
+	case syncMapCommandRPushWithLock:
+		return this.parseRPushWithLock(input)
 	case syncMapCommandLLen:
 		return this.parseLLen(input)
 	case syncMapCommandLIndex:
@@ -524,36 +528,35 @@ func (this *SyncMapServerConn) parseDel(input [][]byte) {
 
 // INCRBY
 func (this *SyncMapServerConn) incrByImpl(key string, value int, needLock bool) int {
-	if this.IsMasterServer() {
-		if needLock {
-			this.lockKeysDirect([]string{key})
-		}
-		x := 0
-		this.loadDirectWithDecoding(key, &x)
-		x += value
-		this.storeDirectWithEncoding(key, x)
-		if needLock {
-			this.unlockKeysDirect([]string{key})
-		}
-		return x
-	}
 	if needLock {
-		return decodeInt(this.send(syncMapCommandIncrByWithLock, []byte(key), encodeToBytes(value)))
-	} else {
-		return decodeInt(this.send(syncMapCommandIncrBy, []byte(key), encodeToBytes(value)))
+		this.lockKeysDirect([]string{key})
 	}
+	x := 0
+	this.loadDirectWithDecoding(key, &x)
+	x += value
+	this.storeDirectWithEncoding(key, x)
+	if needLock {
+		this.unlockKeysDirect([]string{key})
+	}
+	return x
 }
 func (this *SyncMapServerConn) IncrBy(key string, value int) int {
-	needLock := !this.IsNowTransaction()
-	return this.incrByImpl(key, value, needLock)
+	needLock := !this.myConnectionIsLocking(key)
+	if this.IsMasterServer() {
+		return this.incrByImpl(key, value, needLock)
+	} else {
+		command := syncMapCommandIncrBy
+		if needLock {
+			command = syncMapCommandIncrByWithLock
+		}
+		return decodeInt(this.send(command, []byte(key), encodeToBytes(value)))
+	}
 }
 func (this *SyncMapServerConn) parseIncrBy(input [][]byte) []byte {
-	value := decodeInt(input[2])
-	return encodeToBytes(this.incrByImpl(string(input[1]), value, false))
+	return encodeToBytes(this.incrByImpl(string(input[1]), decodeInt(input[2]), false))
 }
 func (this *SyncMapServerConn) parseIncrByWithLock(input [][]byte) []byte {
-	value := decodeInt(input[2])
-	return encodeToBytes(this.incrByImpl(string(input[1]), value, true))
+	return encodeToBytes(this.incrByImpl(string(input[1]), decodeInt(input[2]), true))
 }
 
 // DBSIZE
@@ -569,12 +572,10 @@ func (this *SyncMapServerConn) parseDBSize(input [][]byte) []byte {
 }
 
 // RPUSH :: List に要素を追加したのち index を返す
-// NOTE: Lockをするのでトランザクション時に呼び出すのはだめ
-func (this *SyncMapServerConn) rpushImpl(key string, encodedValue []byte) int {
-	if this.IsNowTransaction() {
-		log.Panic("デッドロックするのでtransaction中に呼び出すのはやめてください！")
+func (this *SyncMapServerConn) rpushImpl(key string, encodedValue []byte, needLock bool) int {
+	if needLock {
+		this.lockKeysDirect([]string{key})
 	}
-	this.lockKeysDirect([]string{key})
 	elist, ok := this.loadDirect(key)
 	if !ok { // そもそも存在しなかった時は追加
 		this.storeDirect(key, [][]byte{encodedValue})
@@ -582,18 +583,28 @@ func (this *SyncMapServerConn) rpushImpl(key string, encodedValue []byte) int {
 	}
 	list := append(elist.([][]byte), encodedValue)
 	this.storeDirect(key, list)
-	this.unlockKeysDirect([]string{key})
+	if needLock {
+		this.unlockKeysDirect([]string{key})
+	}
 	return len(list) - 1
 }
 func (this *SyncMapServerConn) RPush(key string, value interface{}) int {
+	needLock := !this.myConnectionIsLocking(key)
 	if this.IsMasterServer() {
-		return this.rpushImpl(key, encodeToBytes(value))
+		return this.rpushImpl(key, encodeToBytes(value), needLock)
 	} else {
-		return decodeInt(this.send(syncMapCommandRPush, []byte(key), encodeToBytes(value)))
+		command := syncMapCommandRPush
+		if needLock {
+			command = syncMapCommandRPushWithLock
+		}
+		return decodeInt(this.send(command, []byte(key), encodeToBytes(value)))
 	}
 }
 func (this *SyncMapServerConn) parseRPush(input [][]byte) []byte {
-	return encodeToBytes(this.rpushImpl(string(input[1]), input[2]))
+	return encodeToBytes(this.rpushImpl(string(input[1]), input[2], false))
+}
+func (this *SyncMapServerConn) parseRPushWithLock(input [][]byte) []byte {
+	return encodeToBytes(this.rpushImpl(string(input[1]), input[2], true))
 }
 
 // LLEN: list のサイズを返す
@@ -971,6 +982,19 @@ func (this *SyncMapServerConn) deleteDirect(key string) {
 	this.server.mutexMap.Delete(key)
 	this.server.lockedMap.Delete(key)
 	atomic.AddInt32(&this.server.keyCount, -1)
+}
+
+// IsLocked とは違って自身がそれをロックしているかどうかを調べる
+func (this *SyncMapServerConn) myConnectionIsLocking(key string) bool {
+	if !this.IsNowTransaction() {
+		return false
+	}
+	for _, k := range this.lockedKeys {
+		if k == key {
+			return true
+		}
+	}
+	return false
 }
 
 // 生のbyteを送信
