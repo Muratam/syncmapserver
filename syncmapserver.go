@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/gob"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/shamaton/msgpack"
 )
 
 // 同時にリクエストされるGoroutine の数がこれに比べて多いと性能が落ちる。
@@ -24,7 +24,11 @@ const defaultReadBufferSize = 8192                  // ガッと取ったほう�
 const RedisHostPrivateIPAddress = "192.168.111.111" // ここで指定したサーバーに
 // `NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
 const SyncMapBackUpPath = "./syncmapbackup-" // カレントディレクトリにバックアップを作成。パーミッションに注意。
-const DefaultBackUpTimeSecond = 30           // この秒数毎にバックアップファイルを作成する(デフォルトでBackUpが作成される設定)
+// 起動後この秒数毎にバックアップファイルを作成する(デフォルトでBackUpが作成される設定)
+// /initialize の 120秒後にBackUpとかが多分いい感じかも。
+// Redis は save 900 1 \n save 300 10 \n save 60 10000 とかを手動で設定ファイルに書くとよさそう
+const DefaultBackUpTimeSecond = 30
+
 // 一人がロック中に他のロックしていない人が値を書き換えることができるが問題はないはず
 //  ↑ 整合性が必要なデータかつ不必要なデータということになるので、そんなことは起こらないはず
 
@@ -130,7 +134,6 @@ const ( // COMMANDS
 	// そのほか
 	syncMapCommandFlushAll = "FLUSHALL"
 	syncMapCommandCustom   = "CUSTOM" // custom
-	// NOTE: LIST_GET_ALL 欲しい？
 	// check lock
 	syncMapCommandIncrByWithLock = "I_WL"
 	syncMapCommandRPushWithLock  = "RPUSH_WL"
@@ -224,42 +227,13 @@ func writeAll(conn net.Conn, content []byte) {
 //
 // 変更できるようにpointer型で受け取ること
 func decodeFromBytes(input []byte, x interface{}) {
-	// if p, ok := x.(*User); ok {
-	// 	(*p).Unmarshal(input)
-	// 	return
-	// }
-	if p, ok := x.(*string); ok {
-		UnmarshalString(p, input)
-		return
-	}
-	var buf bytes.Buffer
-	buf.Write(input)
-	dec := gob.NewDecoder(&buf)
-	err := dec.Decode(x)
-	if err != nil {
-		log.Panic(err)
-	}
+	msgpack.Decode(input, x)
 }
+
+// 240 - 17
 func encodeToBytes(x interface{}) []byte {
-	// if p, ok := x.(User); ok {
-	// 	byf, _ := p.Marshal([]byte{})
-	// 	return byf
-	// }
-	if p, ok := x.(string); ok {
-		return MarshalString(p)
-	}
-	var buf bytes.Buffer
-	err := gob.NewEncoder(&buf).Encode(x)
-	if err != nil {
-		panic(err)
-	}
-	return buf.Bytes()
-}
-func MarshalString(this string) []byte {
-	return []byte(this)
-}
-func UnmarshalString(this *string, x []byte) {
-	(*this) = string(x)
+	d, _ := msgpack.Encode(&x)
+	return d
 }
 func join(input [][]byte) []byte {
 	// 要素数 4B (32bit)
@@ -324,9 +298,10 @@ func splitBytesToStrs(input []byte) []string {
 	return result
 }
 func sbytes(s string) []byte {
-	return []byte(s)
-	// NOTE: かなりunsafe なやりかたなので落ちるかもしれないがbyteの変換は更に高速化可能
+	// かなりunsafe なやりかたなので落ちるかもしれないがbyteの変換は更に高速化可能
 	// return *(*[]byte)(unsafe.Pointer(&s))
+	// EncodeToBytes / DecodeFromBytes のほうが強すぎて意味がない
+	return []byte(s)
 }
 func decodeBool(input []byte) bool {
 	result := true
@@ -1075,17 +1050,20 @@ func (this *SyncMapServerConn) sendBySlave(command string, packet []byte, rawPac
 	this.server.connectionPoolStatus[poolIndex] = ConnectionPoolStatusEmpty
 	if command == syncMapCommandLockKey {
 		// ロック開始 => conn に connectionPoolIndex を設定
-		this.connectionPoolIndex = poolIndex
 		this.lockedKeys = splitBytesToStrs(rawPacket[0])
+		this.connectionPoolIndex = poolIndex
 		return result
 	} else if command == syncMapCommandUnlockKey {
 		// ロック終了 => conn の connectionPoolIndex を空に設定
 		this.connectionPoolIndex = NoConnectionIsSelected
+		this.server.connectionPoolEmptyChannel <- poolIndex
 		this.lockedKeys = []string{}
+		return result
 	} else if len(this.lockedKeys) > 0 {
 		// ロック中は他の人にあげない
 		return result
+	} else {
+		this.server.connectionPoolEmptyChannel <- poolIndex
+		return result
 	}
-	this.server.connectionPoolEmptyChannel <- poolIndex
-	return result
 }
