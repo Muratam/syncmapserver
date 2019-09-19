@@ -19,15 +19,16 @@ import (
 	"github.com/golang-collections/collections/stack"
 )
 
-// 同時にリクエストされるGoroutine の数がこれに比べて多いと性能が落ちる。かといってものすごい多いと peer する. 16 ~ 100 くらいが安定か？
+// 同時にリクエストされるGoroutine の数がこれに比べて多いと性能が落ちる。
+// かといってものすごい多いと peer する. 16 ~ 100 くらいが安定か？アクセス過多な場合は仕方ない。
 const maxSyncMapServerConnectionNum = 100
 const defaultReadBufferSize = 8192                  // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
 const RedisHostPrivateIPAddress = "192.168.111.111" // ここで指定したサーバーに
 // `NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
 const SyncMapBackUpPath = "./syncmapbackup-" // カレントディレクトリにバックアップを作成。パーミッションに注意。
 const DefaultBackUpTimeSecond = 30           // この秒数毎にバックアップファイルを作成する(デフォルトでBackUpが作成される設定)
-// 一人がロック中に他のロックしていない人が値を書き換えることができる。
-//   これは整合性が必要なデータかつ不必要なデータということになるので、そんなことは起こらないはず
+// 一人がロック中に他のロックしていない人が値を書き換えることができるが問題はないはず
+//  ↑ 整合性が必要なデータかつ不必要なデータということになるので、そんなことは起こらないはず
 
 func MyServerIsOnMasterServerIP() bool {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
@@ -88,15 +89,16 @@ type KeyValueStoreConn interface { // ptr は参照を着けてLoadすること�
 	Exists(key string) bool
 	Del(key string)
 	IncrBy(key string, value int) int
-	DBSize() int // means key count
-	// Keys() []string TODO:
+	DBSize() int       // means key count
+	AllKeys() []string // get all keys
 	FlushAll()
 	// List 関連
-	RPush(key string, value interface{}) int // Push後の 自身の index を返す
+	RPush(key string, values ...interface{}) int // Push後の最後の要素の index を返す
 	LLen(key string) int
 	LIndex(key string, index int, value interface{}) bool // ptr (キーが無ければ false)
 	LSet(key string, index int, value interface{})
-	// LRange(key string, start, stop int, values []interface{}) // ptr(0,-1 で全て取得可能) TODO:
+	// LRange(key string, startIndex, stopIncludingIndex int, values []interface{}) // ptr (0,-1 で全て取得可能) (負数の場合はPythonと同じような処理(stopIncludingIndexがPythonより1多い)) [a,b,c][0:-1] はPythonでは最後を含まないがこちらは含む
+	// LPop / RPop
 	// IsLocked(key string) は Redis には存在しない
 	Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool)
 	TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool)
@@ -108,14 +110,15 @@ type MGetResult struct {
 }
 
 const ( // COMMANDS
-	syncMapCommandGet    = "G"    // get
-	syncMapCommandMGet   = "MGET" // multi get
-	syncMapCommandSet    = "S"    // set
-	syncMapCommandMSet   = "MSET" // multi set
-	syncMapCommandExists = "E"    // check if exists key
-	syncMapCommandDel    = "D"    // delete
-	syncMapCommandIncrBy = "I"    // incrBy value
-	syncMapCommandDBSize = "L"    // stored key count
+	syncMapCommandGet     = "G"       // get
+	syncMapCommandMGet    = "MGET"    // multi get
+	syncMapCommandSet     = "S"       // set
+	syncMapCommandMSet    = "MSET"    // multi set
+	syncMapCommandExists  = "E"       // check if exists key
+	syncMapCommandDel     = "D"       // delete
+	syncMapCommandIncrBy  = "I"       // incrBy value
+	syncMapCommandDBSize  = "L"       // stored key count
+	syncMapCommandAllKeys = "ALLKEYS" // get all keys
 	// list (内部的に([]byte ではなく [][]byte として保存している))
 	// 順序が関係ないものに使うと吉
 	syncMapCommandRPush  = "RPUSH"  // append value to list(最初が空でも可能)
@@ -366,6 +369,8 @@ func (this *SyncMapServerConn) interpretWrapFunction(buf []byte) []byte {
 		return this.parseIncrByWithLock(input)
 	case syncMapCommandDBSize:
 		return this.parseDBSize(input)
+	case syncMapCommandAllKeys:
+		return this.parseAllKeys()
 	// List Command
 	case syncMapCommandRPush:
 		return this.parseRPush(input)
@@ -571,33 +576,56 @@ func (this *SyncMapServerConn) parseDBSize(input [][]byte) []byte {
 	return encodeToBytes(this.DBSize())
 }
 
+// ALLKEYS
+func (this *SyncMapServerConn) AllKeys() []string {
+	if this.IsMasterServer() {
+		result := make([]string, 0)
+		this.server.SyncMap.Range(func(key, value interface{}) bool {
+			result = append(result, key.(string))
+			return true
+		})
+		return result
+	} else {
+		return splitBytesToStrs(this.send(syncMapCommandAllKeys))
+	}
+}
+func (this *SyncMapServerConn) parseAllKeys() []byte {
+	keys := this.AllKeys()
+	return joinStrsToBytes(keys)
+}
+
 // RPUSH :: List に要素を追加したのち index を返す
-func (this *SyncMapServerConn) rpushImpl(key string, encodedValue []byte, needLock bool) int {
+func (this *SyncMapServerConn) rpushImpl(key string, joinedValues []byte, needLock bool) int {
 	if needLock {
 		this.lockKeysDirect([]string{key})
 	}
+	values := split(joinedValues)
 	elist, ok := this.loadDirect(key)
 	if !ok { // そもそも存在しなかった時は追加
-		this.storeDirect(key, [][]byte{encodedValue})
+		this.storeDirect(key, values)
 		return 0
 	}
-	list := append(elist.([][]byte), encodedValue)
+	list := append(elist.([][]byte), values...)
 	this.storeDirect(key, list)
 	if needLock {
 		this.unlockKeysDirect([]string{key})
 	}
 	return len(list) - 1
 }
-func (this *SyncMapServerConn) RPush(key string, value interface{}) int {
+func (this *SyncMapServerConn) RPush(key string, values ...interface{}) int {
 	needLock := !this.myConnectionIsLocking(key)
+	joiningValues := make([][]byte, 0)
+	for _, value := range values {
+		joiningValues = append(joiningValues, encodeToBytes(value))
+	}
 	if this.IsMasterServer() {
-		return this.rpushImpl(key, encodeToBytes(value), needLock)
+		return this.rpushImpl(key, join(joiningValues), needLock)
 	} else {
 		command := syncMapCommandRPush
 		if needLock {
 			command = syncMapCommandRPushWithLock
 		}
-		return decodeInt(this.send(command, []byte(key), encodeToBytes(value)))
+		return decodeInt(this.send(command, []byte(key), join(joiningValues)))
 	}
 }
 func (this *SyncMapServerConn) parseRPush(input [][]byte) []byte {
@@ -676,6 +704,9 @@ func (this *SyncMapServerConn) parseLSet(input [][]byte) {
 	decodeFromBytes(input[2], &index)
 	this.lsetImpl(string(input[1]), index, input[3])
 }
+
+// func (this *SyncMapServerConn) LRange(key string, startIndex, stopIncludingIndex int, values []interface{}) {
+// }
 
 // トランザクション
 func (this *SyncMapServerConn) IsLockedKey(key string) bool {

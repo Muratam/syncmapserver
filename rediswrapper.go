@@ -10,7 +10,6 @@ import (
 	"github.com/go-redis/redis"
 )
 
-
 type RedisWrapper struct {
 	Redis        *redis.Client
 	tx           *redis.Tx
@@ -160,6 +159,15 @@ func (this *RedisWrapper) DBSize() int {
 		return int(this.Redis.DBSize().Val())
 	}
 }
+func (this *RedisWrapper) AllKeys() []string {
+	this.CheckNotSet()
+	if this.IsTransactionNow() {
+		return this.tx.Keys("*").Val()
+	} else {
+		return this.Redis.Keys("*").Val()
+	}
+}
+
 func (this *RedisWrapper) FlushAll() {
 	this.SetSet()
 	if this.IsTransactionNow() {
@@ -170,13 +178,17 @@ func (this *RedisWrapper) FlushAll() {
 }
 
 // List 系は全て Encode して保存(intも)
-func (this *RedisWrapper) RPush(key string, value interface{}) int {
+func (this *RedisWrapper) RPush(key string, values ...interface{}) int {
 	this.SetSet()
+	encodeds := make([]interface{}, len(values))
+	for i, value := range values {
+		encodeds[i] = encodeToBytes(value)
+	}
 	var size int64
 	if this.IsTransactionNow() {
-		size = (*this.pipe).RPush(key, encodeToBytes(value)).Val()
+		size = (*this.pipe).RPush(key, encodeds...).Val()
 	} else {
-		size = this.Redis.RPush(key, encodeToBytes(value)).Val()
+		size = this.Redis.RPush(key, encodeds...).Val()
 	}
 	return int(size) - 1
 }

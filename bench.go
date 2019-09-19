@@ -3,69 +3,47 @@ package main
 import (
 	"fmt"
 	"log"
-	"math/rand"
 
 	"net/http"
 	_ "net/http/pprof"
-	"reflect"
-	"runtime"
 	"strconv"
-	"sync"
-	"time"
 )
 
-/////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////
-
-func assert(cond bool) {
-	if !cond {
-		panic("assertion failed")
-	}
-}
-func random() int {
-	return rand.Intn(100)
-}
-func randStr() string {
-	result := "あいうえおかきくけこ"
-	for i := 0; i < 100; i++ {
-		result += strconv.Itoa(random())
-	}
-	return result
-}
-func randUser() User {
-	return User{
-		ID:          int64(random()),
-		AccountName: randStr(),
-		Address:     randStr(),
-		// NumSellItems: random(),
-		// LastBump:     time.Now().Truncate(time.Second),
-		// CreatedAt:    time.Now().Truncate(time.Second),
-	}
-}
-func ExecuteImpl(times int, isParallel bool, maxGoroutineNum int, f func(i int)) {
-	if isParallel {
-		var wg sync.WaitGroup
-		// GoRoutine の生成コストはかなり高いので、現実的な状況に合わせる
-		// 10000件同時接続なんてことはありえないはずなので
-		for i := 0; i < maxGoroutineNum; i++ {
-			j := i
-			wg.Add(1)
-			go func() {
-				for k := 0; k < times/maxGoroutineNum; k++ {
-					f(k*maxGoroutineNum + j)
-				}
-				wg.Done()
-			}()
-		}
-		wg.Wait()
-	} else {
-		for i := 0; i < times; i++ {
-			f(i)
-		}
-	}
-}
-func Execute(times int, isParallel bool, f func(i int)) {
-	ExecuteImpl(times, isParallel, maxSyncMapServerConnectionNum, f)
+func TestMasterSlaveInterpret() {
+	func() {
+		smMaster.FlushAll()
+		u := randUser()
+		smSlave.Set("k1", u)
+		var u1 User
+		smMaster.Get("k1", &u1)
+		assert(u == u1)
+		var u2 User
+		smSlave.Get("k1", &u2)
+		assert(u == u2)
+	}()
+	func() {
+		smMaster.FlushAll()
+		u := randUser()
+		smMaster.Set("k1", u)
+		var u1 User
+		smMaster.Get("k1", &u1)
+		assert(u == u1)
+		var u2 User
+		smSlave.Get("k1", &u2)
+		assert(u == u2)
+	}()
+	func() {
+		smMaster.FlushAll()
+		u := randUser()
+		smSlave.MSet(map[string]interface{}{"k1": u, "k2": u, "k3": u})
+		var u1 User
+		smMaster.Get("k1", &u1)
+		assert(u == u1)
+		var u2 User
+		smSlave.Get("k2", &u2)
+		assert(u == u2)
+	}()
+	fmt.Println("-------  Master Slave Test Passed  -------")
 }
 
 type User struct {
@@ -76,6 +54,30 @@ type User struct {
 	// LastBump     time.Time `json:"-" db:"last_bump"`
 	// CreatedAt    time.Time `json:"-" db:"created_at"`
 }
+
+var localUserMap4000 map[string]interface{}
+var keys4000 []string
+
+func randUser() User {
+	return User{
+		ID:          int64(random()),
+		AccountName: randStr(),
+		Address:     randStr(),
+		// NumSellItems: random(),
+		// LastBump:     time.Now().Truncate(time.Second),
+		// CreatedAt:    time.Now().Truncate(time.Second),
+	}
+}
+func InitForBenchMGetMSetUser4000() {
+	localUserMap4000 = map[string]interface{}{}
+	for i := 0; i < 4000; i++ {
+		key := randStr()
+		localUserMap4000[key] = randUser()
+		keys4000 = append(keys4000, key)
+	}
+}
+
+/////////////////////////////////////////////
 
 func TestGetSetInt(conn KeyValueStoreConn) {
 	// int を Get して Set するだけの 一番基本的なやつ
@@ -209,42 +211,6 @@ func TestMGetMSetInt(conn KeyValueStoreConn) {
 		assert(proValue == preValue)
 	}
 }
-func TestMasterSlaveInterpret() {
-	func() {
-		smMaster.FlushAll()
-		u := randUser()
-		smSlave.Set("k1", u)
-		var u1 User
-		smMaster.Get("k1", &u1)
-		assert(u == u1)
-		var u2 User
-		smSlave.Get("k1", &u2)
-		assert(u == u2)
-	}()
-	func() {
-		smMaster.FlushAll()
-		u := randUser()
-		smMaster.Set("k1", u)
-		var u1 User
-		smMaster.Get("k1", &u1)
-		assert(u == u1)
-		var u2 User
-		smSlave.Get("k1", &u2)
-		assert(u == u2)
-	}()
-	func() {
-		smMaster.FlushAll()
-		u := randUser()
-		smSlave.MSet(map[string]interface{}{"k1": u, "k2": u, "k3": u})
-		var u1 User
-		smMaster.Get("k1", &u1)
-		assert(u == u1)
-		var u2 User
-		smSlave.Get("k2", &u2)
-		assert(u == u2)
-	}()
-	fmt.Println("-------  Master Slave Test Passed  -------")
-}
 func TestParallelTransactionIncr(conn KeyValueStoreConn) {
 	conn.Set("a", 0)
 	ExecuteImpl(2500, true, 250, func(i int) {
@@ -258,18 +224,6 @@ func TestParallelTransactionIncr(conn KeyValueStoreConn) {
 		}
 	})
 	assert(conn.IncrBy("a", 0) == 25000)
-}
-
-var localUserMap4000 map[string]interface{}
-var keys4000 []string
-
-func InitForBenchMGetMSetUser4000() {
-	localUserMap4000 = map[string]interface{}{}
-	for i := 0; i < 4000; i++ {
-		key := randStr()
-		localUserMap4000[key] = randUser()
-		keys4000 = append(keys4000, key)
-	}
 }
 func BenchMGetMSetUser4000(conn KeyValueStoreConn) {
 	conn.MSet(localUserMap4000)
@@ -309,7 +263,6 @@ func BenchParallelIncryBy(conn KeyValueStoreConn) {
 	})
 	fmt.Println(conn.IncrBy("a", 0) == 49995000)
 }
-
 func BenchParallelUserGetSet(conn KeyValueStoreConn) {
 	Execute(10000, true, func(i int) {
 		key := keys4000[i%4000]
@@ -326,53 +279,11 @@ func BenchParallelUserGetSet(conn KeyValueStoreConn) {
 // Lock を解除したい(RPush / LSet)
 // Transactionをチェックしたい
 
-func Test3(f func(conn KeyValueStoreConn), times int) (milliSecs []int64) {
-	rand.Seed(time.Now().UnixNano())
-	fmt.Println("------- ", runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name(), " x ", times, " -------")
-	for i, conn := range stores {
-		conn.FlushAll()
-		start := time.Now()
-		for j := 0; j < times; j++ {
-			f(conn)
-		}
-		duration := time.Now().Sub(start)
-		milliSecs = append(milliSecs, int64(duration/time.Millisecond))
-		fmt.Println(names[i], ":", milliSecs[i], "ms")
-	}
-	return milliSecs
-}
-func TestAverage3(f func(conn KeyValueStoreConn), times int) {
-	milliSecs := make([]int64, len(stores))
-	for n := 1; n <= times; n++ {
-		resMilliSecs := Test3(f, 1)
-		fmt.Println("AVERAGE:")
-		for i := 0; i < len(milliSecs); i++ {
-			milliSecs[i] += resMilliSecs[i]
-			fmt.Println("  ", names[i], ":", milliSecs[i]/int64(n), "ms")
-		}
-	}
-}
-
-// NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) のように ISUCON本本では使う
-var smMaster = NewSyncMapServerConn("127.0.0.1:8080", true)
-var smSlave = NewSyncMapServerConn("127.0.0.1:8080", false)
-var redisWrap = NewRedisWrapper("127.0.0.1:6379")
-
-var stores = []KeyValueStoreConn{smMaster, smSlave, redisWrap}
-var names = []string{"smMaster", "smSlave ", "redis   "}
-
-// var stores = []KeyValueStoreConn{smMaster, redisWrap}
-// var names = []string{"smMaster", "redis   "}
-// var stores = []KeyValueStoreConn{smSlave}
-// var names = []string{"smSlave "}
-
-// var stores = []KeyValueStoreConn{smMaster}
-// var names = []string{"smMaster"}
-
 func main() {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
+	TestMasterSlaveInterpret()
 	InitForBenchMGetMSetUser4000()
 	t := 10
 	Test3(TestGetSetInt, t)
@@ -383,7 +294,6 @@ func main() {
 	Test3(TestMGetMSetUser, 1)
 	Test3(TestMGetMSetInt, 1)
 	Test3(TestParallelTransactionIncr, 1)
-	TestMasterSlaveInterpret()
 	fmt.Println("-----------BENCH----------")
 	Test3(BenchMGetMSetStr4000, 3)
 	Test3(BenchMGetMSetUser4000, 1)
