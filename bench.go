@@ -6,6 +6,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"strconv"
+	"time"
 )
 
 func TestMasterSlaveInterpret() {
@@ -15,6 +16,8 @@ func TestMasterSlaveInterpret() {
 		smSlave.Set("k1", u)
 		var u1 User
 		smMaster.Get("k1", &u1)
+		fmt.Println(u)
+		fmt.Println(u1)
 		assert(u == u1)
 		var u2 User
 		smSlave.Get("k1", &u2)
@@ -46,12 +49,12 @@ func TestMasterSlaveInterpret() {
 }
 
 type User struct {
-	ID          int64  `json:"id" db:"id"`
-	AccountName string `json:"account_name" db:"account_name"`
-	Address     string `json:"address,omitempty" db:"address"`
-	// NumSellItems int    `json:"num_sell_items" db:"num_sell_items"`
-	// LastBump     time.Time `json:"-" db:"last_bump"`
-	// CreatedAt    time.Time `json:"-" db:"created_at"`
+	ID           int64     `json:"id" db:"id"`
+	AccountName  string    `json:"account_name" db:"account_name"`
+	Address      string    `json:"address,omitempty" db:"address"`
+	NumSellItems int       `json:"num_sell_items" db:"num_sell_items"`
+	LastBump     time.Time `json:"-" db:"last_bump"`
+	CreatedAt    time.Time `json:"-" db:"created_at"`
 }
 
 var localUserMap4000 map[string]interface{}
@@ -59,12 +62,12 @@ var keys4000 []string
 
 func randUser() User {
 	return User{
-		ID:          int64(random()),
-		AccountName: randStr(),
-		Address:     randStr(),
-		// NumSellItems: random(),
-		// LastBump:     time.Now().Truncate(time.Second),
-		// CreatedAt:    time.Now().Truncate(time.Second),
+		ID:           int64(random()),
+		AccountName:  randStr(),
+		Address:      randStr(),
+		NumSellItems: random(),
+		LastBump:     time.Now().Truncate(time.Second),
+		CreatedAt:    time.Now().Truncate(time.Second),
 	}
 }
 func InitForBenchMGetMSetUser4000() {
@@ -306,23 +309,22 @@ func main() {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	// TestMasterSlaveInterpret()
-	// gob.Register(User{})
 	InitForBenchMGetMSetUser4000()
-	// t := 10
-	// Test3(TestGetSetInt, t)
-	// Test3(TestGetSetUser, t)
-	// Test3(TestIncrBy, t)
-	// Test3(TestKeyCount, t)
-	// Test3(TestMGetMSetString, 1)
-	// Test3(TestMGetMSetUser, 1)
-	// Test3(TestMGetMSetInt, 1)
-	// Test3(TestParallelTransactionIncr, 1)
-	// fmt.Println("-----------BENCH----------")
-	// Test3(BenchMGetMSetStr4000, 3)
-	// Test3(BenchMGetMSetUser4000, 1)
-	// Test3(BenchGetSetUser, 4000)
-	// TestAverage3(BenchParallelIncryBy, 1) // IncrBy は実装の都合上 Redisのほうがやや速い
+	TestMasterSlaveInterpret()
+	t := 10
+	Test3(TestGetSetInt, t)
+	Test3(TestGetSetUser, t)
+	Test3(TestIncrBy, t)
+	Test3(TestKeyCount, t)
+	Test3(TestMGetMSetString, 1)
+	Test3(TestMGetMSetUser, 1)
+	Test3(TestMGetMSetInt, 1)
+	Test3(TestParallelTransactionIncr, 1)
+	fmt.Println("-----------BENCH----------")
+	Test3(BenchMGetMSetStr4000, 3)
+	Test3(BenchMGetMSetUser4000, 1)
+	Test3(BenchGetSetUser, 4000)
+	TestAverage3(BenchParallelIncryBy, 1) // IncrBy は実装の都合上 Redisのほうがやや速い
 	TestAverage3(BenchParallelUserGetSetPopular, 10)
-	// TestAverage3(BenchParallelUserGetSet, 1000)
+	TestAverage3(BenchParallelUserGetSet, 1000)
 }

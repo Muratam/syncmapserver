@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/gob"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/shamaton/msgpack"
 )
 
 // 同時にリクエストされるGoroutine の数がこれに比べて多いと性能が落ちる。
@@ -227,42 +227,13 @@ func writeAll(conn net.Conn, content []byte) {
 //
 // 変更できるようにpointer型で受け取ること
 func decodeFromBytes(input []byte, x interface{}) {
-	// if p, ok := x.(*User); ok {
-	// 	(*p).Unmarshal(input)
-	// 	return
-	// }
-	if p, ok := x.(*string); ok {
-		UnmarshalString(p, input)
-		return
-	}
-	var buf bytes.Buffer
-	buf.Write(input)
-	dec := gob.NewDecoder(&buf)
-	err := dec.Decode(x)
-	if err != nil {
-		log.Panic(err)
-	}
+	msgpack.Decode(input, x)
 }
+
+// 240 - 17
 func encodeToBytes(x interface{}) []byte {
-	// if p, ok := x.(User); ok {
-	// 	byf, _ := p.Marshal([]byte{})
-	// 	return byf
-	// }
-	if p, ok := x.(string); ok {
-		return MarshalString(p)
-	}
-	var buf bytes.Buffer
-	err := gob.NewEncoder(&buf).Encode(x)
-	if err != nil {
-		panic(err)
-	}
-	return buf.Bytes()
-}
-func MarshalString(this string) []byte {
-	return []byte(this)
-}
-func UnmarshalString(this *string, x []byte) {
-	(*this) = string(x)
+	d, _ := msgpack.Encode(&x)
+	return d
 }
 func join(input [][]byte) []byte {
 	// 要素数 4B (32bit)

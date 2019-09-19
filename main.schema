@@ -1,5 +1,0 @@
-struct User {
-	ID           int64
-	AccountName  string
-	Address      string
-}

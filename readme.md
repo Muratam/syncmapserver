@@ -77,7 +77,7 @@ gob + parallel  (50並列)
 
 1. TODO: トランザクションの強化(テストの充実)
 1. TODO: list の速度検証 -> LRange / LPop / RPop
-1. TODO: codegen が対応できないデータ型が多い(そのわりにgobがおそい)
+1. TODO: MessagePackが失敗するものを探す(Sliceとかポインターとか)
 1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
 1. TODO: さらにさらにDBの中身ををGoのコードに簡単に吸い出せるようにしたい。
 1. BackUpの検証
