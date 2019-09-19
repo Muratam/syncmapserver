@@ -105,7 +105,7 @@ type MGetResult struct {
 	resultMap map[string][]byte
 }
 
-const (
+const ( // COMMANDS
 	syncMapCommandGet    = "G"    // get
 	syncMapCommandMGet   = "MGET" // multi get
 	syncMapCommandSet    = "S"    // set
@@ -129,6 +129,9 @@ const (
 	syncMapCommandFlushAll = "FLUSHALL"
 	syncMapCommandCustom   = "CUSTOM" // custom
 	// NOTE: LIST_GET_ALL 欲しい？
+	// check lock
+	syncMapCommandIncrByWithLock = "I_WL"
+	syncMapCommandRPushWithLock  = "RPUSH_WL"
 )
 
 // bytes utils // Connection Pool のために Contents長さを指定する変換が入る
@@ -357,6 +360,8 @@ func (this *SyncMapServerConn) interpretWrapFunction(buf []byte) []byte {
 		this.parseDel(input)
 	case syncMapCommandIncrBy:
 		return this.parseIncrBy(input)
+	case syncMapCommandIncrByWithLock:
+		return this.parseIncrByWithLock(input)
 	case syncMapCommandDBSize:
 		return this.parseDBSize(input)
 	// List Command
@@ -518,25 +523,37 @@ func (this *SyncMapServerConn) parseDel(input [][]byte) {
 }
 
 // INCRBY
-// NOTE: Lockをするのでトランザクション時に呼び出すのはだめ
-func (this *SyncMapServerConn) IncrBy(key string, value int) int {
-	if this.IsNowTransaction() {
-		log.Panic("デッドロックするのでtransaction中に呼び出すのはやめてください！")
-	}
+func (this *SyncMapServerConn) incrByImpl(key string, value int, needLock bool) int {
 	if this.IsMasterServer() {
-		this.lockKeys([]string{key})
+		if needLock {
+			this.lockKeysDirect([]string{key})
+		}
 		x := 0
 		this.loadDirectWithDecoding(key, &x)
 		x += value
 		this.storeDirectWithEncoding(key, x)
-		this.unlockKeys([]string{key})
+		if needLock {
+			this.unlockKeysDirect([]string{key})
+		}
 		return x
 	}
-	return decodeInt(this.send(syncMapCommandIncrBy, []byte(key), encodeToBytes(value)))
+	if needLock {
+		return decodeInt(this.send(syncMapCommandIncrByWithLock, []byte(key), encodeToBytes(value)))
+	} else {
+		return decodeInt(this.send(syncMapCommandIncrBy, []byte(key), encodeToBytes(value)))
+	}
+}
+func (this *SyncMapServerConn) IncrBy(key string, value int) int {
+	needLock := !this.IsNowTransaction()
+	return this.incrByImpl(key, value, needLock)
 }
 func (this *SyncMapServerConn) parseIncrBy(input [][]byte) []byte {
 	value := decodeInt(input[2])
-	return encodeToBytes(this.IncrBy(string(input[1]), value))
+	return encodeToBytes(this.incrByImpl(string(input[1]), value, false))
+}
+func (this *SyncMapServerConn) parseIncrByWithLock(input [][]byte) []byte {
+	value := decodeInt(input[2])
+	return encodeToBytes(this.incrByImpl(string(input[1]), value, true))
 }
 
 // DBSIZE
@@ -554,7 +571,10 @@ func (this *SyncMapServerConn) parseDBSize(input [][]byte) []byte {
 // RPUSH :: List に要素を追加したのち index を返す
 // NOTE: Lockをするのでトランザクション時に呼び出すのはだめ
 func (this *SyncMapServerConn) rpushImpl(key string, encodedValue []byte) int {
-	this.lockKeys([]string{key})
+	if this.IsNowTransaction() {
+		log.Panic("デッドロックするのでtransaction中に呼び出すのはやめてください！")
+	}
+	this.lockKeysDirect([]string{key})
 	elist, ok := this.loadDirect(key)
 	if !ok { // そもそも存在しなかった時は追加
 		this.storeDirect(key, [][]byte{encodedValue})
@@ -562,7 +582,7 @@ func (this *SyncMapServerConn) rpushImpl(key string, encodedValue []byte) int {
 	}
 	list := append(elist.([][]byte), encodedValue)
 	this.storeDirect(key, list)
-	this.unlockKeys([]string{key})
+	this.unlockKeysDirect([]string{key})
 	return len(list) - 1
 }
 func (this *SyncMapServerConn) RPush(key string, value interface{}) int {
@@ -662,8 +682,9 @@ func (this *SyncMapServerConn) parseIsLockedKey(input [][]byte) []byte {
 	return encodeToBytes(this.IsLockedKey(string(input[1])))
 }
 
-func (this *SyncMapServerConn) lockKeys(keys []string) {
+func (this *SyncMapServerConn) lockKeysDirect(keys []string) {
 	// キーはソート済みを想定
+	this.lockedKeys = keys
 	for _, key := range keys {
 		m, ok := this.server.mutexMap.Load(key)
 		if !ok {
@@ -675,7 +696,7 @@ func (this *SyncMapServerConn) lockKeys(keys []string) {
 	}
 }
 
-func (this *SyncMapServerConn) unlockKeys(keys []string) {
+func (this *SyncMapServerConn) unlockKeysDirect(keys []string) {
 	// キーはソート済みを想定
 	for i := len(keys) - 1; i >= 0; i-- {
 		key := keys[i]
@@ -686,6 +707,7 @@ func (this *SyncMapServerConn) unlockKeys(keys []string) {
 		this.server.lockedMap.Store(key, false)
 		m.(*sync.Mutex).Unlock()
 	}
+	this.lockedKeys = []string{}
 }
 func (this *SyncMapServerConn) Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool) {
 	return this.TransactionWithKeys([]string{key}, f)
@@ -699,9 +721,9 @@ func (this *SyncMapServerConn) TransactionWithKeys(keysBase []string, f func(tx 
 	}
 	if this.IsMasterServer() {
 		// サーバー側はそのまま
-		this.lockKeys(keys)
+		this.lockKeysDirect(keys)
 		f(this)
-		this.unlockKeys(keys)
+		this.unlockKeysDirect(keys)
 	} else {
 		keysEncoded := joinStrsToBytes(keys)
 		newConn := this.New()
@@ -713,11 +735,11 @@ func (this *SyncMapServerConn) TransactionWithKeys(keysBase []string, f func(tx 
 }
 func (this *SyncMapServerConn) parseLockKeys(input [][]byte) {
 	keys := splitBytesToStrs(input[1])
-	this.lockKeys(keys)
+	this.lockKeysDirect(keys)
 }
 func (this *SyncMapServerConn) parseUnlockKeys(input [][]byte) {
 	keys := splitBytesToStrs(input[1])
-	this.unlockKeys(keys)
+	this.unlockKeysDirect(keys)
 }
 
 // 自作関数を使用する時用

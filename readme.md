@@ -74,13 +74,17 @@ gob + parallel  (50並列)
 	-  DB.Update() -> redis.Transaction.Set(){} -> (Commit() / RollBack())
 
 # やるだけ
+
 1. トランザクションの強化(テストの充実 / Lock Waiting Connection の削減))
 1. TODO: Redis BackUp
-1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
-1. TODO: さらにさらにGoのコードにSQLを変換したい。
 1. TODO: 一人がロック中に他の人が書き換えられるのは注意.
     - 一つのキーに保存された list の 全てを一括取得も実装しておきたい(keys command / LRange)
     - 本家は RPush が一度に複数送信できるっぽい
+
 1. 自動スケールしたい (maxSyncMapServerConnectionNumに対して多すぎるとつらい)
+
 1. TODO: codegen が対応できないデータ型が多い
-1. sbytes(s string) []byte
+1. NOTE: 高速化 sbytes(s string) []byte
+
+1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
+1. TODO: さらにさらにGoのコードにSQLを変換したい。
