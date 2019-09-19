@@ -247,12 +247,15 @@ func TestMasterSlaveInterpret() {
 }
 func TestParallelTransactionIncr(conn KeyValueStoreConn) {
 	conn.Set("a", 0)
-	ExecuteImpl(10000, true, 1000, func(i int) {
-		conn.Transaction("a", func(tx KeyValueStoreConn) {
+	ExecuteImpl(2500, true, 250, func(i int) {
+		// Redisは楽観ロックなので成功するまでやる
+		// SyncMapServerはロックを取るので成功する
+		for !conn.Transaction("a", func(tx KeyValueStoreConn) {
 			x := 0
 			tx.Get("a", &x)
-			tx.Set("a", x+1)
-		})
+			tx.Set("a", x+10)
+		}) {
+		}
 	})
 	fmt.Println(conn.IncrBy("a", 0))
 }
@@ -365,6 +368,7 @@ var names = []string{"smMaster", "smSlave ", "redis   "}
 
 // var stores = []KeyValueStoreConn{smMaster}
 // var names = []string{"smMaster"}
+// TODO: [GET] / [SET] WARNING
 
 func main() {
 	go func() {

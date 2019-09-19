@@ -13,21 +13,40 @@ import (
 
 type RedisWrapper struct {
 	Redis *redis.Client
+	tx    *redis.Tx
+	pipe  *redis.Pipeliner
 }
 
-func NewRedisWrapper(address string) RedisWrapper {
-	var result RedisWrapper
-	result.Redis = redis.NewClient(&redis.Options{
-		Addr:     address,
-		Password: "", // no password set
-		DB:       0,  // use default DB
-	})
-	return result
+func NewRedisWrapper(address string) *RedisWrapper {
+	return &RedisWrapper{
+		Redis: redis.NewClient(&redis.Options{
+			Addr:     address,
+			Password: "", // no password set
+			DB:       0,  // use default DB
+		}),
+		tx:   nil,
+		pipe: nil,
+	}
+}
+func (this *RedisWrapper) New() *RedisWrapper {
+	return &RedisWrapper{
+		Redis: this.Redis,
+		tx:    nil,
+		pipe:  nil,
+	}
+}
+func (this *RedisWrapper) IsTransactionNow() bool {
+	return this.tx != nil && this.pipe != nil
 }
 
 // General Commands
-func (this RedisWrapper) Get(key string, value interface{}) bool {
-	got := this.Redis.Get(key)
+func (this *RedisWrapper) Get(key string, value interface{}) bool {
+	var got *redis.StringCmd
+	if this.IsTransactionNow() {
+		got = this.tx.Get(key)
+	} else {
+		got = this.Redis.Get(key)
+	}
 	if gotInt, err := got.Int(); err == nil {
 		(*value.(*int)) = gotInt
 		return true
@@ -39,15 +58,23 @@ func (this RedisWrapper) Get(key string, value interface{}) bool {
 	decodeFromBytes(bs, value)
 	return true
 }
-func (this RedisWrapper) Set(key string, value interface{}) {
+func (this *RedisWrapper) Set(key string, value interface{}) {
 	if valueInt, ok := value.(int); ok {
-		this.Redis.Set(key, valueInt, 0)
+		if this.IsTransactionNow() {
+			(*this.pipe).Set(key, valueInt, 0)
+		} else {
+			this.Redis.Set(key, valueInt, 0)
+		}
 		return
 	}
 	bs := encodeToBytes(value)
-	this.Redis.Set(key, bs, 0)
+	if this.IsTransactionNow() {
+		(*this.pipe).Set(key, bs, 0)
+	} else {
+		this.Redis.Set(key, bs, 0)
+	}
 }
-func (this RedisWrapper) MGet(keys []string) MGetResult {
+func (this *RedisWrapper) MGet(keys []string) MGetResult {
 	// TODO: int64
 	loads := this.Redis.MGet(keys...).Val()
 	result := newMGetResult()
@@ -67,7 +94,7 @@ func (this RedisWrapper) MGet(keys []string) MGetResult {
 	}
 	return result
 }
-func (this RedisWrapper) MSet(store map[string]interface{}) {
+func (this *RedisWrapper) MSet(store map[string]interface{}) {
 	var pairs []interface{}
 	for key, value := range store {
 		if valueInt, ok := value.(int); ok {
@@ -79,32 +106,32 @@ func (this RedisWrapper) MSet(store map[string]interface{}) {
 	}
 	this.Redis.MSet(pairs...)
 }
-func (this RedisWrapper) Exists(key string) bool {
+func (this *RedisWrapper) Exists(key string) bool {
 	return this.Redis.Exists(key).Val() == 1
 }
-func (this RedisWrapper) Del(key string) {
+func (this *RedisWrapper) Del(key string) {
 	this.Redis.Del(key)
 }
-func (this RedisWrapper) IncrBy(key string, value int) int {
+func (this *RedisWrapper) IncrBy(key string, value int) int {
 	return int(this.Redis.IncrBy(key, int64(value)).Val())
 }
-func (this RedisWrapper) DBSize() int {
+func (this *RedisWrapper) DBSize() int {
 	return int(this.Redis.DBSize().Val())
 }
-func (this RedisWrapper) FlushAll() {
+func (this *RedisWrapper) FlushAll() {
 	this.Redis.FlushAll()
 }
 
 // List 系は全て Encode して保存(intも)
-func (this RedisWrapper) RPush(key string, value interface{}) int {
+func (this *RedisWrapper) RPush(key string, value interface{}) int {
 	size := this.Redis.RPush(key, encodeToBytes(value)).Val()
 	return int(size) - 1
 }
-func (this RedisWrapper) LLen(key string) int {
+func (this *RedisWrapper) LLen(key string) int {
 	size := this.Redis.LLen(key).Val()
 	return int(size) - 1
 }
-func (this RedisWrapper) LIndex(key string, index int, value interface{}) bool {
+func (this *RedisWrapper) LIndex(key string, index int, value interface{}) bool {
 	loads, err := this.Redis.LIndex(key, int64(index)).Result()
 	if err != nil {
 		return false
@@ -112,19 +139,20 @@ func (this RedisWrapper) LIndex(key string, index int, value interface{}) bool {
 	decodeFromBytes([]byte(loads), value)
 	return true
 }
-func (this RedisWrapper) LSet(key string, index int, value interface{}) {
+func (this *RedisWrapper) LSet(key string, index int, value interface{}) {
 	this.Redis.LSet(key, int64(index), encodeToBytes(value))
 }
 
-func (this RedisWrapper) Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool) {
+func (this *RedisWrapper) Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool) {
 	return this.TransactionWithKeys([]string{key}, f)
 }
-func (this RedisWrapper) TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool) {
+func (this *RedisWrapper) TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool) {
 	err := this.Redis.Watch(func(tx *redis.Tx) error {
 		_, err := tx.Pipelined(func(pipe redis.Pipeliner) error {
-			// count, err = pipe.Get("key").Int()
-			// pipe.Set("key", count+1, 0)
-			f(this)
+			conn := this.New()
+			conn.tx = tx
+			conn.pipe = &pipe
+			f(conn)
 			return nil
 		})
 		return err
