@@ -16,8 +16,6 @@ func TestMasterSlaveInterpret() {
 		smSlave.Set("k1", u)
 		var u1 User
 		smMaster.Get("k1", &u1)
-		fmt.Println(u)
-		fmt.Println(u1)
 		assert(u == u1)
 		var u2 User
 		smSlave.Get("k1", &u2)
@@ -45,9 +43,42 @@ func TestMasterSlaveInterpret() {
 		smSlave.Get("k2", &u2)
 		assert(u == u2)
 	}()
+	func() {
+		getNow := func() time.Time { return time.Now().Truncate(time.Second) }
+		type Tree struct {
+			X  int
+			Y  int
+			T  time.Time
+			TR []Tree
+		}
+		var eqTree func(a, b Tree) bool
+		eqTree = func(a, b Tree) bool {
+			if a.X != b.X || a.Y != b.Y || a.T != b.T || len(a.TR) != len(b.TR) {
+				return false
+			}
+			for i := 0; i < len(a.TR); i++ {
+				if !eqTree(a.TR[i], b.TR[i]) {
+					return false
+				}
+			}
+			return true
+		}
+		smMaster.FlushAll()
+		src := Tree{X: random(), Y: random(), T: getNow(), TR: []Tree{Tree{X: random(), Y: random(), T: getNow()}}}
+		dst1 := Tree{}
+		dst2 := Tree{}
+		smSlave.Set("k1", src)
+		smMaster.Get("k1", &dst1)
+		smSlave.Get("k1", &dst2)
+		assert(eqTree(src, dst1))
+		assert(eqTree(src, dst2))
+	}()
 	fmt.Println("-------  Master Slave Test Passed  -------")
 }
 
+// time.Time は truncateすること。あとpointer型もやめてね
+// 大文字のものしか保存されないよ
+// 再帰型のスライスも行けるよ
 type User struct {
 	ID           int64     `json:"id" db:"id"`
 	AccountName  string    `json:"account_name" db:"account_name"`
