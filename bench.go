@@ -76,40 +76,6 @@ func TestMasterSlaveInterpret() {
 	fmt.Println("-------  Master Slave Test Passed  -------")
 }
 
-// time.Time は truncateすること。あとpointer型もやめてね
-// 大文字のものしか保存されないよ
-// 再帰型のスライスも行けるよ
-type User struct {
-	ID           int64     `json:"id" db:"id"`
-	AccountName  string    `json:"account_name" db:"account_name"`
-	Address      string    `json:"address,omitempty" db:"address"`
-	NumSellItems int       `json:"num_sell_items" db:"num_sell_items"`
-	LastBump     time.Time `json:"-" db:"last_bump"`
-	CreatedAt    time.Time `json:"-" db:"created_at"`
-}
-
-var localUserMap4000 map[string]interface{}
-var keys4000 []string
-
-func randUser() User {
-	return User{
-		ID:           int64(random()),
-		AccountName:  randStr(),
-		Address:      randStr(),
-		NumSellItems: random(),
-		LastBump:     time.Now().Truncate(time.Second),
-		CreatedAt:    time.Now().Truncate(time.Second),
-	}
-}
-func InitForBenchMGetMSetUser4000() {
-	localUserMap4000 = map[string]interface{}{}
-	for i := 0; i < 4000; i++ {
-		key := randStr()
-		localUserMap4000[key] = randUser()
-		keys4000 = append(keys4000, key)
-	}
-}
-
 /////////////////////////////////////////////
 
 func TestGetSetInt(conn KeyValueStoreConn) {
@@ -269,6 +235,22 @@ func TestLRangeInt(conn KeyValueStoreConn) {
 	gots2 = conn.LRange(key, 0, 4)
 	assert(gots2.Len() == 5)
 	assert(conn.LLen(key) == n)
+	for i := 0; i < n; i++ {
+		x := -1
+		conn.LPop(key, &x)
+		assert(x == i)
+	}
+	assert(conn.LLen(key) == 0)
+	for i := 0; i < n; i++ {
+		conn.RPush(key, i)
+	}
+	assert(conn.LLen(key) == n)
+	for i := 0; i < n; i++ {
+		x := -1
+		conn.RPop(key, &x)
+		assert(x == n-i-1)
+	}
+	assert(conn.LLen(key) == 0)
 }
 func BenchListUser(conn KeyValueStoreConn) {
 	conn.FlushAll()
@@ -310,6 +292,23 @@ func TestParallelTransactionIncr(conn KeyValueStoreConn) {
 	})
 	assert(conn.IncrBy("a", 0) == 25000)
 }
+func TestParallelList(conn KeyValueStoreConn) {
+	ExecuteImpl(2500, true, 250, func(i int) {
+		// Redisは楽観ロックなので成功するまでやる
+		// SyncMapServerはロックを取るので成功する
+		for !conn.Transaction("a", func(tx KeyValueStoreConn) {
+			l := tx.LLen("a")
+			fmt.Println(conn.IncrBy("a", 0))
+			tx.RPush("a", l)
+			if l > 0 {
+				tx.RPop("a", nil)
+			}
+		}) {
+		}
+	})
+	// assert(conn.IncrBy("a", 0) == 1)
+}
+
 func BenchMGetMSetUser4000(conn KeyValueStoreConn) {
 	conn.MSet(localUserMap4000)
 	mgetResult := conn.MGet(keys4000)
@@ -371,7 +370,6 @@ func BenchParallelUserGetSetPopular(conn KeyValueStoreConn) {
 		}
 	})
 }
-
 func BenchParallelUserGetSet(conn KeyValueStoreConn) {
 	Execute(10000, true, func(i int) {
 		key := keys4000[i%4000]
@@ -399,11 +397,12 @@ func main() {
 	// Test3(TestGetSetUser, t)
 	// Test3(TestIncrBy, t)
 	// Test3(TestKeyCount, t)
+	// Test3(TestLRangeInt, t)
+	Test3(TestParallelList, 1)
 	// Test3(TestMGetMSetString, 1)
 	// Test3(TestMGetMSetUser, 1)
 	// Test3(TestMGetMSetInt, 1)
 	// Test3(TestParallelTransactionIncr, 1)
-	Test3(TestLRangeInt, 1)
 	// fmt.Println("-----------BENCH----------")
 	// Test3(BenchMGetMSetStr4000, 1)
 	// Test3(BenchMGetMSetUser4000, 1)

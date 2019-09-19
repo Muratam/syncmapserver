@@ -15,15 +15,49 @@ var smMaster = NewSyncMapServerConn("127.0.0.1:8080", true)
 var smSlave = NewSyncMapServerConn("127.0.0.1:8080", false)
 var redisWrap = NewRedisWrapper("127.0.0.1:6379")
 
-var stores = []KeyValueStoreConn{smMaster, smSlave, redisWrap}
-var names = []string{"smMaster", "smSlave ", "redis   "}
+// var stores = []KeyValueStoreConn{smMaster, smSlave, redisWrap}
+// var names = []string{"smMaster", "smSlave ", "redis   "}
 
 // var stores = []KeyValueStoreConn{smMaster, redisWrap}
 // var names = []string{"smMaster", "redis   "}
 // var stores = []KeyValueStoreConn{smSlave}
 // var names = []string{"smSlave "}
-// var stores = []KeyValueStoreConn{smMaster}
-// var names = []string{"smMaster"}
+var stores = []KeyValueStoreConn{redisWrap}
+var names = []string{"redis"}
+
+// time.Time は truncateすること。あとpointer型もやめてね
+// 大文字のものしか保存されないよ
+// 再帰型のスライスも行けるよ
+type User struct {
+	ID           int64     `json:"id" db:"id"`
+	AccountName  string    `json:"account_name" db:"account_name"`
+	Address      string    `json:"address,omitempty" db:"address"`
+	NumSellItems int       `json:"num_sell_items" db:"num_sell_items"`
+	LastBump     time.Time `json:"-" db:"last_bump"`
+	CreatedAt    time.Time `json:"-" db:"created_at"`
+}
+
+var localUserMap4000 map[string]interface{}
+var keys4000 []string
+
+func randUser() User {
+	return User{
+		ID:           int64(random()),
+		AccountName:  randStr(),
+		Address:      randStr(),
+		NumSellItems: random(),
+		LastBump:     time.Now().Truncate(time.Second),
+		CreatedAt:    time.Now().Truncate(time.Second),
+	}
+}
+func InitForBenchMGetMSetUser4000() {
+	localUserMap4000 = map[string]interface{}{}
+	for i := 0; i < 4000; i++ {
+		key := randStr()
+		localUserMap4000[key] = randUser()
+		keys4000 = append(keys4000, key)
+	}
+}
 
 func assert(cond bool) {
 	if !cond {

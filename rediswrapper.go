@@ -192,6 +192,40 @@ func (this *RedisWrapper) RPush(key string, values ...interface{}) int {
 	}
 	return int(size) - 1
 }
+
+// LPop
+func (this *RedisWrapper) LPop(key string, value interface{}) bool {
+	this.SetSet()
+	var res *redis.StringCmd
+	if this.IsTransactionNow() {
+		res = (*this.pipe).LPop(key)
+	} else {
+		res = this.Redis.LPop(key)
+	}
+	loads, err := res.Result()
+	if err != nil {
+		return false
+	}
+	decodeFromBytes([]byte(loads), value)
+	return true
+}
+
+// RPop
+func (this *RedisWrapper) RPop(key string, value interface{}) bool {
+	this.SetSet()
+	var res *redis.StringCmd
+	if this.IsTransactionNow() {
+		res = (*this.pipe).RPop(key)
+	} else {
+		res = this.Redis.RPop(key)
+	}
+	loads, err := res.Result()
+	if err != nil {
+		return false
+	}
+	decodeFromBytes([]byte(loads), value)
+	return true
+}
 func (this *RedisWrapper) LLen(key string) int {
 	this.CheckNotSet()
 	var size int64

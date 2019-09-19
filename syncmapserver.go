@@ -97,9 +97,11 @@ type KeyValueStoreConn interface { // ptr は参照を着けてLoadすること�
 	RPush(key string, values ...interface{}) int // Push後の最後の要素の index を返す
 	LLen(key string) int
 	LIndex(key string, index int, value interface{}) bool // ptr (キーが無ければ false)
+	LPop(key string, value interface{}) bool              // ptr (キーが無ければ false)
+	RPop(key string, value interface{}) bool              // ptr (キーが無ければ false)
 	LSet(key string, index int, value interface{})
 	LRange(key string, startIndex, stopIncludingIndex int) LRangeResult // ptr (0,-1 で全て取得可能) (負数の場合はPythonと同じような処理(stopIncludingIndexがPythonより1多い)) [a,b,c][0:-1] はPythonでは最後を含まないがこちらは含む
-	// LPop / RPop
+
 	// IsLocked(key string) は Redis には存在しない
 	Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool)
 	TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool)
@@ -128,6 +130,8 @@ const ( // COMMANDS
 	syncMapCommandRPush  = "RPUSH"  // append value to list(最初が空でも可能)
 	syncMapCommandLLen   = "LLEN"   // len of list
 	syncMapCommandLIndex = "LINDEX" // get value from list
+	syncMapCommandRPop   = "RPOP"   // pop last
+	syncMapCommandLPop   = "LPOP"   // pop head
 	syncMapCommandLSet   = "LSET"   // update value at index
 	syncMapCommandLRange = "LRANGE" // get list of range
 	// 特定のキーをLockする。
@@ -141,6 +145,8 @@ const ( // COMMANDS
 	// check lock
 	syncMapCommandIncrByWithLock = "I_WL"
 	syncMapCommandRPushWithLock  = "RPUSH_WL"
+	syncMapCommandLPopWithLock   = "LPOP_WL"
+	syncMapCommandRPopWithLock   = "RPOP_WL"
 )
 
 // bytes utils // Connection Pool のために Contents長さを指定する変換が入る
@@ -245,6 +251,9 @@ func writeAll(conn net.Conn, content []byte) {
 //
 // 変更できるようにpointer型で受け取ること
 func decodeFromBytes(input []byte, x interface{}) {
+	if x == nil {
+		return
+	}
 	msgpack.Decode(input, x)
 }
 
@@ -339,6 +348,7 @@ func (this *SyncMapServerConn) interpretWrapFunction(buf []byte) []byte {
 	if len(input) < 1 {
 		panic(nil)
 	}
+	fmt.Println(string(input[0]))
 	switch string(input[0]) {
 	// General Commands
 	case syncMapCommandGet:
@@ -370,6 +380,14 @@ func (this *SyncMapServerConn) interpretWrapFunction(buf []byte) []byte {
 		return this.parseLLen(input)
 	case syncMapCommandLIndex:
 		return this.parseLIndex(input)
+	case syncMapCommandLPop:
+		return this.parseLPop(input)
+	case syncMapCommandLPopWithLock:
+		return this.parseLPopWithLock(input)
+	case syncMapCommandRPop:
+		return this.parseRPop(input)
+	case syncMapCommandRPopWithLock:
+		return this.parseRPopWithLock(input)
 	case syncMapCommandLSet:
 		this.parseLSet(input)
 	case syncMapCommandLRange:
@@ -673,6 +691,80 @@ func (this *SyncMapServerConn) parseLIndex(input [][]byte) []byte {
 	return list[index]
 }
 
+// LPOP/RPOP 変更できるようにpointer型で受け取ること
+func (this *SyncMapServerConn) popImpl(key string, needLock, isPopHead bool) []byte {
+	// Encode して join したものを受け取る
+	if needLock {
+		this.lockKeysDirect([]string{key})
+		defer this.unlockKeysDirect([]string{key})
+	}
+	elist, ok := this.loadDirect(key)
+	if !ok {
+		return []byte{}
+	}
+	list := elist.([][]byte)
+	if len(list) == 0 {
+		return []byte{}
+	}
+	var result []byte
+	if isPopHead {
+		result = list[0]
+		list = list[1:]
+	} else {
+		result = list[len(list)-1]
+		list = list[:len(list)-1]
+	}
+	this.storeDirect(key, list)
+	return result
+}
+func (this *SyncMapServerConn) popWrap(key string, value interface{}, isPopHead bool) bool {
+	needLock := !this.myConnectionIsLocking(key)
+	if this.IsMasterServer() {
+		encoded := this.popImpl(key, needLock, isPopHead)
+		if len(encoded) == 0 {
+			return false
+		}
+		decodeFromBytes(encoded, value)
+		return true
+	} else {
+		command := ""
+		if needLock {
+			if isPopHead {
+				command = syncMapCommandLPopWithLock
+			} else {
+				command = syncMapCommandRPopWithLock
+			}
+		} else {
+			if isPopHead {
+				command = syncMapCommandLPop
+			} else {
+				command = syncMapCommandRPop
+			}
+		}
+		result := false
+		decodeFromBytes(this.send(command, []byte(key)), &value)
+		return result
+	}
+}
+func (this *SyncMapServerConn) LPop(key string, value interface{}) bool {
+	return this.popWrap(key, value, true)
+}
+func (this *SyncMapServerConn) parseLPop(input [][]byte) []byte {
+	return this.popImpl(string(input[1]), false, true)
+}
+func (this *SyncMapServerConn) parseLPopWithLock(input [][]byte) []byte {
+	return this.popImpl(string(input[1]), true, true)
+}
+func (this *SyncMapServerConn) RPop(key string, value interface{}) bool {
+	return this.popWrap(key, value, false)
+}
+func (this *SyncMapServerConn) parseRPop(input [][]byte) []byte {
+	return this.popImpl(string(input[1]), false, false)
+}
+func (this *SyncMapServerConn) parseRPopWithLock(input [][]byte) []byte {
+	return this.popImpl(string(input[1]), true, false)
+}
+
 // LSet: List を Update する
 func (this *SyncMapServerConn) lsetImpl(key string, index int, encodedValue []byte) {
 	elist, ok := this.loadDirect(key)
@@ -824,9 +916,13 @@ func (this *SyncMapServerConn) TransactionWithKeys(keysBase []string, f func(tx 
 	}
 	if this.IsMasterServer() {
 		// サーバー側はそのまま
+		fmt.Println("1x")
 		this.lockKeysDirect(keys)
+		fmt.Println("2x")
 		f(this)
+		fmt.Println("3x")
 		this.unlockKeysDirect(keys)
+		fmt.Println("4x")
 	} else {
 		keysEncoded := joinStrsToBytes(keys)
 		newConn := this.New()
@@ -1105,6 +1201,7 @@ func (this *SyncMapServerConn) send(command string, packet ...[]byte) []byte {
 	}
 	packed := join(encoded)
 	if this.IsMasterServer() {
+		log.Panic("Error Execute Directry On Master Server !!")
 		return this.interpretWrapFunction(packed)
 	} else {
 		return this.sendBySlave(command, packed, packet...)
