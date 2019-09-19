@@ -15,15 +15,15 @@ var smMaster = NewSyncMapServerConn("127.0.0.1:8080", true)
 var smSlave = NewSyncMapServerConn("127.0.0.1:8080", false)
 var redisWrap = NewRedisWrapper("127.0.0.1:6379")
 
-// var stores = []KeyValueStoreConn{smMaster, smSlave, redisWrap}
-// var names = []string{"smMaster", "smSlave ", "redis   "}
+var stores = []KeyValueStoreConn{smMaster, smSlave, redisWrap}
+var names = []string{"smMaster", "smSlave ", "redis   "}
 
 // var stores = []KeyValueStoreConn{smMaster, redisWrap}
 // var names = []string{"smMaster", "redis   "}
 // var stores = []KeyValueStoreConn{smSlave}
 // var names = []string{"smSlave "}
-var stores = []KeyValueStoreConn{redisWrap}
-var names = []string{"redis"}
+// var stores = []KeyValueStoreConn{redisWrap}
+// var names = []string{"redis"}
 
 // time.Time は truncateすること。あとpointer型もやめてね
 // 大文字のものしか保存されないよ

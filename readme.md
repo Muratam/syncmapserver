@@ -37,24 +37,16 @@
 - User struct を作り、それをむちゃくちゃな回数 Get / Set しまくるコード
 
 ```
-codegen + single
-  smMaster : 21 ms
-  smSlave  : 713 ms
-  redis    : 1074 ms
-codegen + parallel  (50並列)
-  smMaster : 17 ms
-  smSlave  : 317 ms
-  redis    : 317 ms
-gob + parallel  (50並列)
-  smMaster : 194 ms
-  smSlave  : 472 ms
-  redis    : 515 ms
+-------  main.BenchParallelUserGetSet  x  1  -------
+AVERAGE:
+   smMaster : 29 ms
+   smSlave  : 268 ms
+   redis    : 321 ms
 ```
 
 - Masterサーバーの操作は速い。オーバーヘッドがないから当然。
-- エンコード・デコードにかなり時間がかかる。可能なら手間だが codegen を使うべき。
-- 並列にすると速い。 Redis の速度と Slave の速度はほぼ同じになる。
-  - これは予想通り。SyncMapServerの良点は1台分がTCPしなくてよいところなので
+- エンコード・デコードもかなり速い。MessagePackさまさま
+- 並列にすると速い。 だいたいSlaveとRedisの速度は同じくらいだが、チューニングしたのでちょっとだけSlaveのほうが速い。
 
 
 # ISUCONでの使用時のヒント

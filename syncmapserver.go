@@ -348,7 +348,6 @@ func (this *SyncMapServerConn) interpretWrapFunction(buf []byte) []byte {
 	if len(input) < 1 {
 		panic(nil)
 	}
-	fmt.Println(string(input[0]))
 	switch string(input[0]) {
 	// General Commands
 	case syncMapCommandGet:
@@ -916,13 +915,9 @@ func (this *SyncMapServerConn) TransactionWithKeys(keysBase []string, f func(tx 
 	}
 	if this.IsMasterServer() {
 		// サーバー側はそのまま
-		fmt.Println("1x")
 		this.lockKeysDirect(keys)
-		fmt.Println("2x")
 		f(this)
-		fmt.Println("3x")
 		this.unlockKeysDirect(keys)
-		fmt.Println("4x")
 	} else {
 		keysEncoded := joinStrsToBytes(keys)
 		newConn := this.New()
