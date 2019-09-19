@@ -31,7 +31,7 @@
 - MULTIGET / MULTISET があるので N+1問題にも対応可能
 
 
-## ベンチマークと動作テスト TODO:
+## ベンチマークと動作テスト
 
 - syncmap / rediswrapper の速度の比較と動作テスト keyvaluestore.go でしています
 - User struct を作り、それをむちゃくちゃな回数 Get / Set しまくるコード
@@ -66,11 +66,11 @@ AVERAGE:
 	- isok: SyncMapServerの場合は必ず成功する。/ Redis の場合は失敗するかもしれない(その場合はデータの変更が発生しない) => Commit()の直前なので Rollback()すればよい。
 	-  DB.Update() -> redis.Transaction.Set(){} -> (Commit() / RollBack())
 
-# 過去のISUCONのデータから{SQL/Redis}を分析する
-1. NOTE: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
-1. NOTE: トランザクションの強化(テストの充実 / 過去のISUCON[4-9]の問題からユースケースを考える)
-1. NOTE: DBのデータをそのままバイナリにして保存し、50万件くらいならガッと読み込むやつを書いておきたい。重そうなISUCONのやつでテストする。
-1. NOTE: 実践で使ってみる。ISUCON9の予選のやつとか
-
 # 使い方
 bench.go / test/backuptest.go とかを読んだら分かるはず、Redis互換なので
+
+# TODO: これからやっていきたいこと
+1. goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
+1. 過去のISUCON[4-9]の問題からユースケースを考えたい
+1. DBのデータをそのままバイナリにして保存し、50万件くらいならガッと読み込むやつを書いておきたい。重そうなISUCONのやつでテストする。
+1. 実践で使ってみる。ISUCON9の予選のやつとか

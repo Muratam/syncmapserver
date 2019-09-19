@@ -542,15 +542,17 @@ func (this *SyncMapServerConn) parseDel(input [][]byte) {
 
 // INCRBY
 func (this *SyncMapServerConn) incrByImpl(key string, value int, needLock bool) int {
+	conn := this
 	if needLock {
-		this.lockKeysDirect([]string{key})
+		conn = this.New()
+		conn.lockKeysDirect([]string{key})
 	}
 	x := 0
-	this.loadDirectWithDecoding(key, &x)
+	conn.loadDirectWithDecoding(key, &x)
 	x += value
-	this.storeDirectWithEncoding(key, x)
+	conn.storeDirectWithEncoding(key, x)
 	if needLock {
-		this.unlockKeysDirect([]string{key})
+		conn.unlockKeysDirect([]string{key})
 	}
 	return x
 }
@@ -606,18 +608,20 @@ func (this *SyncMapServerConn) parseAllKeys() []byte {
 // RPUSH :: List に要素を追加したのち index を返す
 func (this *SyncMapServerConn) rpushImpl(key string, joinedValues []byte, needLock bool) int {
 	// Encode して join したものを受け取る
+	conn := this
 	if needLock {
-		this.lockKeysDirect([]string{key})
-		defer this.unlockKeysDirect([]string{key})
+		conn = this.New()
+		conn.lockKeysDirect([]string{key})
+		defer conn.unlockKeysDirect([]string{key})
 	}
 	values := split(joinedValues)
-	elist, ok := this.loadDirect(key)
+	elist, ok := conn.loadDirect(key)
 	if !ok { // そもそも存在しなかった時は追加
 		this.storeDirect(key, values)
 		return len(values) - 1
 	}
 	list := append(elist.([][]byte), values...)
-	this.storeDirect(key, list)
+	conn.storeDirect(key, list)
 	return len(list) - 1
 }
 func (this *SyncMapServerConn) RPush(key string, values ...interface{}) int {
@@ -693,11 +697,13 @@ func (this *SyncMapServerConn) parseLIndex(input [][]byte) []byte {
 // LPOP/RPOP 変更できるようにpointer型で受け取ること
 func (this *SyncMapServerConn) popImpl(key string, needLock, isPopHead bool) []byte {
 	// Encode して join したものを受け取る
+	conn := this
 	if needLock {
-		this.lockKeysDirect([]string{key})
-		defer this.unlockKeysDirect([]string{key})
+		conn = this.New()
+		conn.lockKeysDirect([]string{key})
+		defer conn.unlockKeysDirect([]string{key})
 	}
-	elist, ok := this.loadDirect(key)
+	elist, ok := conn.loadDirect(key)
 	if !ok {
 		return []byte{}
 	}
@@ -713,7 +719,7 @@ func (this *SyncMapServerConn) popImpl(key string, needLock, isPopHead bool) []b
 		result = list[len(list)-1]
 		list = list[:len(list)-1]
 	}
-	this.storeDirect(key, list)
+	conn.storeDirect(key, list)
 	return result
 }
 func (this *SyncMapServerConn) popWrap(key string, value interface{}, isPopHead bool) bool {
@@ -913,14 +919,14 @@ func (this *SyncMapServerConn) TransactionWithKeys(keysBase []string, f func(tx 
 		copy(keys, keysBase)
 		sort.Sort(sort.StringSlice(keys))
 	}
+	newConn := this.New()
 	if this.IsMasterServer() {
 		// サーバー側はそのまま
-		this.lockKeysDirect(keys)
-		f(this)
-		this.unlockKeysDirect(keys)
+		newConn.lockKeysDirect(keys)
+		f(newConn)
+		newConn.unlockKeysDirect(keys)
 	} else {
 		keysEncoded := joinStrsToBytes(keys)
-		newConn := this.New()
 		newConn.send(syncMapCommandLockKey, keysEncoded)
 		f(newConn)
 		newConn.send(syncMapCommandUnlockKey, keysEncoded)

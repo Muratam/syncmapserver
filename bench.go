@@ -293,20 +293,30 @@ func TestParallelTransactionIncr(conn KeyValueStoreConn) {
 	assert(conn.IncrBy("a", 0) == 25000)
 }
 func TestParallelList(conn KeyValueStoreConn) {
+	// Redisは楽観ロックなので成功するまでやる
+	// SyncMapServerはロックを取るので成功する
 	ExecuteImpl(2500, true, 250, func(i int) {
-		// Redisは楽観ロックなので成功するまでやる
-		// SyncMapServerはロックを取るので成功する
+		for !conn.Transaction("a", func(tx KeyValueStoreConn) { tx.IncrBy("a", 1) }) {
+		}
+	})
+	assert(conn.IncrBy("a", 0) == 2500)
+	conn.Set("a", 0)
+	ExecuteImpl(2500, true, 250, func(i int) {
+		conn.IncrBy("a", 1)
+	})
+	assert(conn.IncrBy("a", 0) == 2500)
+	conn.FlushAll()
+	ExecuteImpl(2500, true, 250, func(i int) {
 		for !conn.Transaction("a", func(tx KeyValueStoreConn) {
 			l := tx.LLen("a")
-			fmt.Println(conn.IncrBy("a", 0))
-			tx.RPush("a", l)
+			tx.RPush("a", 1)
 			if l > 0 {
 				tx.RPop("a", nil)
 			}
 		}) {
 		}
 	})
-	// assert(conn.IncrBy("a", 0) == 1)
+	assert(conn.LLen("a") == 1)
 }
 
 func BenchMGetMSetUser4000(conn KeyValueStoreConn) {
@@ -392,23 +402,23 @@ func main() {
 	}()
 	InitForBenchMGetMSetUser4000()
 	TestMasterSlaveInterpret()
-	t := 10
-	Test3(TestGetSetInt, t)
-	Test3(TestGetSetUser, t)
-	Test3(TestIncrBy, t)
-	Test3(TestKeyCount, t)
-	Test3(TestLRangeInt, t)
-	// Test3(TestParallelList, 1)
-	Test3(TestMGetMSetString, 1)
-	Test3(TestMGetMSetUser, 1)
-	Test3(TestMGetMSetInt, 1)
-	Test3(TestParallelTransactionIncr, 1)
-	fmt.Println("-----------BENCH----------")
-	Test3(BenchMGetMSetStr4000, 1)
-	Test3(BenchMGetMSetUser4000, 1)
-	Test3(BenchGetSetUser, 4000)
-	TestAverage3(BenchListUser, 1)
-	TestAverage3(BenchParallelIncryBy, 1)
-	TestAverage3(BenchParallelUserGetSetPopular, 1)
-	TestAverage3(BenchParallelUserGetSet, 1000)
+	// t := 10
+	// Test3(TestGetSetInt, t)
+	// Test3(TestGetSetUser, t)
+	// Test3(TestIncrBy, t)
+	// Test3(TestKeyCount, t)
+	// Test3(TestLRangeInt, t)
+	Test3(TestParallelList, 1)
+	// Test3(TestMGetMSetString, 1)
+	// Test3(TestMGetMSetUser, 1)
+	// Test3(TestMGetMSetInt, 1)
+	// Test3(TestParallelTransactionIncr, 1)
+	// fmt.Println("-----------BENCH----------")
+	// Test3(BenchMGetMSetStr4000, 1)
+	// Test3(BenchMGetMSetUser4000, 1)
+	// Test3(BenchGetSetUser, 4000)
+	// TestAverage3(BenchListUser, 1)
+	// TestAverage3(BenchParallelIncryBy, 1)
+	// TestAverage3(BenchParallelUserGetSetPopular, 1)
+	// TestAverage3(BenchParallelUserGetSet, 1000)
 }
