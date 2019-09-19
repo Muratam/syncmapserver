@@ -98,7 +98,7 @@ type KeyValueStoreConn interface { // ptr は参照を着けてLoadすること�
 	LLen(key string) int
 	LIndex(key string, index int, value interface{}) bool // ptr (キーが無ければ false)
 	LSet(key string, index int, value interface{})
-	// LRange(key string, startIndex, stopIncludingIndex int, values []interface{}) // ptr (0,-1 で全て取得可能) (負数の場合はPythonと同じような処理(stopIncludingIndexがPythonより1多い)) [a,b,c][0:-1] はPythonでは最後を含まないがこちらは含む
+	LRange(key string, startIndex, stopIncludingIndex int) LRangeResult // ptr (0,-1 で全て取得可能) (負数の場合はPythonと同じような処理(stopIncludingIndexがPythonより1多い)) [a,b,c][0:-1] はPythonでは最後を含まないがこちらは含む
 	// LPop / RPop
 	// IsLocked(key string) は Redis には存在しない
 	Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool)
@@ -108,6 +108,9 @@ type KeyValueStoreConn interface { // ptr は参照を着けてLoadすること�
 // 一旦 MGetResult を経由することで、重複するキーのロードを一回のロードで済ませられる
 type MGetResult struct {
 	resultMap map[string][]byte
+}
+type LRangeResult struct {
+	resultArray [][]byte
 }
 
 const ( // COMMANDS
@@ -126,6 +129,7 @@ const ( // COMMANDS
 	syncMapCommandLLen   = "LLEN"   // len of list
 	syncMapCommandLIndex = "LINDEX" // get value from list
 	syncMapCommandLSet   = "LSET"   // update value at index
+	syncMapCommandLRange = "LRANGE" // get list of range
 	// 特定のキーをLockする。
 	// それが解除されていれば、 特定のキーをロックする。
 	syncMapCommandLockKey     = "LL" // lock a key
@@ -368,6 +372,8 @@ func (this *SyncMapServerConn) interpretWrapFunction(buf []byte) []byte {
 		return this.parseLIndex(input)
 	case syncMapCommandLSet:
 		this.parseLSet(input)
+	case syncMapCommandLRange:
+		return this.parseLRange(input)
 	case syncMapCommandIsLockedKey:
 		return this.parseIsLockedKey(input)
 	case syncMapCommandLockKey:
@@ -458,7 +464,7 @@ func newMGetResult() MGetResult {
 	result.resultMap = map[string][]byte{}
 	return result
 }
-func (this MGetResult) Get(key string, value interface{}) bool {
+func (this *MGetResult) Get(key string, value interface{}) bool {
 	encoded, ok := this.resultMap[key]
 	if !ok {
 		return false
@@ -582,20 +588,19 @@ func (this *SyncMapServerConn) parseAllKeys() []byte {
 
 // RPUSH :: List に要素を追加したのち index を返す
 func (this *SyncMapServerConn) rpushImpl(key string, joinedValues []byte, needLock bool) int {
+	// Encode して join したものを受け取る
 	if needLock {
 		this.lockKeysDirect([]string{key})
+		defer this.unlockKeysDirect([]string{key})
 	}
 	values := split(joinedValues)
 	elist, ok := this.loadDirect(key)
 	if !ok { // そもそも存在しなかった時は追加
 		this.storeDirect(key, values)
-		return 0
+		return len(values) - 1
 	}
 	list := append(elist.([][]byte), values...)
 	this.storeDirect(key, list)
-	if needLock {
-		this.unlockKeysDirect([]string{key})
-	}
 	return len(list) - 1
 }
 func (this *SyncMapServerConn) RPush(key string, values ...interface{}) int {
@@ -691,6 +696,73 @@ func (this *SyncMapServerConn) parseLSet(input [][]byte) {
 	this.lsetImpl(string(input[1]), index, input[3])
 }
 
+// LRANGE: 範囲指定してリストを取得
+func (this *SyncMapServerConn) lrangeImpl(key string, startIndex, stopIncludingIndex int) [][]byte {
+	elist, ok := this.loadDirect(key)
+	list := elist.([][]byte)
+	if !ok {
+		return [][]byte{}
+	}
+	parse := func(i int) int {
+		if i >= 0 {
+			return i
+		}
+		return len(list) + i
+	}
+	// including
+	iStart := -1
+	iEnd := -1
+	for i := parse(startIndex); i <= parse(stopIncludingIndex); i++ {
+		if i < 0 {
+			i = -1
+			continue
+		}
+		if i >= len(list) {
+			break
+		}
+		if iStart < 0 {
+			iStart = i
+		}
+		iEnd = i
+	}
+	if iStart < 0 || iEnd < 0 || iEnd < iStart {
+		return [][]byte{}
+	}
+	return list[iStart : iEnd+1]
+}
+func (this *SyncMapServerConn) LRange(key string, startIndex, stopIncludingIndex int) LRangeResult {
+	if this.IsMasterServer() {
+		return NewLRangeResult(this.lrangeImpl(key, startIndex, stopIncludingIndex))
+	} else {
+		encoded := this.send(syncMapCommandLRange, []byte(key), encodeToBytes(startIndex), encodeToBytes(stopIncludingIndex))
+		if len(encoded) == 0 {
+			return NewLRangeResult([][]byte{})
+		}
+		return NewLRangeResult(split(encoded))
+	}
+}
+func (this *SyncMapServerConn) parseLRange(input [][]byte) []byte {
+	key := string(input[1])
+	startIndex := decodeInt(input[2])
+	stopIncludingIndex := decodeInt(input[3])
+	return join(this.lrangeImpl(key, startIndex, stopIncludingIndex))
+}
+
+func NewLRangeResult(input [][]byte) LRangeResult {
+	return LRangeResult{resultArray: input}
+}
+
+// 値は ptr で取得すること
+func (this *LRangeResult) Get(index int, value interface{}) {
+	if index < 0 || index >= len(this.resultArray) {
+		log.Panic("Invalid Index For LGET")
+	}
+	decodeFromBytes(this.resultArray[index], value)
+}
+func (this *LRangeResult) Len() int {
+	return len(this.resultArray)
+}
+
 // func (this *SyncMapServerConn) LRange(key string, startIndex, stopIncludingIndex int, values []interface{}) {
 // }
 
@@ -716,8 +788,11 @@ func (this *SyncMapServerConn) lockKeysDirect(keys []string) {
 	for _, key := range keys {
 		m, ok := this.server.mutexMap.Load(key)
 		if !ok {
-			// ここで作成してしまうと二つのLockが競合するので,Store時にだけ生成されるようにする
-			log.Panic("存在しないキー" + key + "へのロックが掛かりました")
+			this.registLockDirectWhenItWontExists(key)
+			m, ok = this.server.mutexMap.Load(key)
+			if !ok {
+				log.Panic("存在しないキーへのロックに失敗しました")
+			}
 		}
 		m.(*sync.Mutex).Lock()
 		this.server.lockedMap.Store(key, true)
@@ -983,9 +1058,7 @@ func (this *SyncMapServerConn) loadDirect(key string) (interface{}, bool) {
 func (this *SyncMapServerConn) storeDirect(key string, value interface{}) {
 	_, exists := this.server.SyncMap.Load(key)
 	if !exists {
-		var m sync.Mutex
-		this.server.mutexMap.Store(key, &m)
-		this.server.lockedMap.Store(key, false)
+		this.registLockDirectWhenItWontExists(key)
 		atomic.AddInt32(&this.server.keyCount, 1)
 	}
 	this.server.SyncMap.Store(key, value)
@@ -999,6 +1072,15 @@ func (this *SyncMapServerConn) deleteDirect(key string) {
 	this.server.mutexMap.Delete(key)
 	this.server.lockedMap.Delete(key)
 	atomic.AddInt32(&this.server.keyCount, -1)
+}
+
+// キーが存在しない可能性が高い時にキーを追加する
+func (this *SyncMapServerConn) registLockDirectWhenItWontExists(key string) {
+	var m sync.Mutex
+	_, loaded := this.server.mutexMap.LoadOrStore(key, &m)
+	if !loaded {
+		this.server.lockedMap.Store(key, false)
+	}
 }
 
 // IsLocked とは違って自身がそれをロックしているかどうかを調べる

@@ -164,15 +164,19 @@ func TestKeyCount(conn KeyValueStoreConn) {
 	assert(conn.Exists(key2))
 	assert(!conn.Exists(key3))
 	assert(conn.DBSize() == 2)
+	assert(len(conn.AllKeys()) == 2)
 	conn.Del(key3)
 	assert(!conn.Exists(key3))
 	assert(conn.DBSize() == 2)
+	assert(len(conn.AllKeys()) == 2)
 	conn.Del(key2)
 	assert(!conn.Exists(key2))
 	assert(conn.DBSize() == 1)
+	assert(len(conn.AllKeys()) == 1)
 	conn.Set(key2, "bb")
 	assert(conn.Exists(key2))
 	assert(conn.DBSize() == 2)
+	assert(len(conn.AllKeys()) == 2)
 }
 func TestMGetMSetString(conn KeyValueStoreConn) {
 	var keys []string
@@ -244,6 +248,54 @@ func TestMGetMSetInt(conn KeyValueStoreConn) {
 		assert(proValue == preValue)
 	}
 }
+func TestLRangeInt(conn KeyValueStoreConn) {
+	conn.FlushAll()
+	key := "a"
+	n := 10
+	for i := 0; i < n; i++ {
+		conn.RPush(key, i)
+	}
+	gots := conn.LRange(key, 0, -1)
+	for i := 0; i < n; i++ {
+		x := -1
+		gots.Get(i, &x)
+		assert(x == i)
+	}
+	assert(gots.Len() == n)
+	gots2 := conn.LRange(key, -1, -1)
+	assert(gots2.Len() == 1)
+	gots2 = conn.LRange(key, -3, -1)
+	assert(gots2.Len() == 3)
+	gots2 = conn.LRange(key, 0, 4)
+	assert(gots2.Len() == 5)
+	assert(conn.LLen(key) == n)
+}
+func BenchListUser(conn KeyValueStoreConn) {
+	conn.FlushAll()
+	n := 10000
+	assert(n%2 == 0)
+	key := "lkey"
+	for i := 0; i < n; i += 2 {
+		u1 := localUserMap4000[keys4000[i%4000]]
+		u2 := localUserMap4000[keys4000[(i+1)%4000]]
+		x := conn.RPush(key, u1, u2)
+		assert(i == x-1)
+		u3x := localUserMap4000[keys4000[(i/2)%4000]]
+		u3y := User{}
+		conn.LIndex(key, (i/2)%4000, &u3y)
+		assert(u3x == u3y)
+	}
+	assert(n == conn.LLen(key))
+	for i := 0; i < n; i++ {
+		u1 := localUserMap4000[keys4000[(100+i)%4000]]
+		conn.LSet(key, i, u1)
+		u2 := User{}
+		conn.LIndex(key, i, &u2)
+		assert(u1 == u2)
+	}
+	assert(n == conn.LLen(key))
+}
+
 func TestParallelTransactionIncr(conn KeyValueStoreConn) {
 	conn.Set("a", 0)
 	ExecuteImpl(2500, true, 250, func(i int) {
@@ -342,20 +394,22 @@ func main() {
 	}()
 	InitForBenchMGetMSetUser4000()
 	TestMasterSlaveInterpret()
-	t := 10
-	Test3(TestGetSetInt, t)
-	Test3(TestGetSetUser, t)
-	Test3(TestIncrBy, t)
-	Test3(TestKeyCount, t)
-	Test3(TestMGetMSetString, 1)
-	Test3(TestMGetMSetUser, 1)
-	Test3(TestMGetMSetInt, 1)
-	Test3(TestParallelTransactionIncr, 1)
-	fmt.Println("-----------BENCH----------")
-	Test3(BenchMGetMSetStr4000, 3)
-	Test3(BenchMGetMSetUser4000, 1)
-	Test3(BenchGetSetUser, 4000)
-	TestAverage3(BenchParallelIncryBy, 1) // IncrBy は実装の都合上 Redisのほうがやや速い
-	TestAverage3(BenchParallelUserGetSetPopular, 10)
-	TestAverage3(BenchParallelUserGetSet, 1000)
+	// t := 10
+	// Test3(TestGetSetInt, t)
+	// Test3(TestGetSetUser, t)
+	// Test3(TestIncrBy, t)
+	// Test3(TestKeyCount, t)
+	// Test3(TestMGetMSetString, 1)
+	// Test3(TestMGetMSetUser, 1)
+	// Test3(TestMGetMSetInt, 1)
+	// Test3(TestParallelTransactionIncr, 1)
+	Test3(TestLRangeInt, 1)
+	// fmt.Println("-----------BENCH----------")
+	// Test3(BenchMGetMSetStr4000, 1)
+	// Test3(BenchMGetMSetUser4000, 1)
+	// Test3(BenchGetSetUser, 4000)
+	// TestAverage3(BenchListUser, 1)
+	// TestAverage3(BenchParallelIncryBy, 1)
+	// TestAverage3(BenchParallelUserGetSetPopular, 1)
+	// TestAverage3(BenchParallelUserGetSet, 1000)
 }

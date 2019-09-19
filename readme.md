@@ -4,9 +4,10 @@
 - ISUCONに特化した最適化をすることで、すごい速度を実現。
 - Master と Slave に分かれており、Masterを動かしているGoアプリはTCPを経由せずにデータを扱える。
 - キーバリューストア型のDB。
-- 同梱のRedisWrapperも KeyValueStore interface を持っているので一瞬で切り替えることが可能。状況に応じて使い分けやすい。
-- きちんとロックする。楽観ロックではない。
-  - IsLocked() コマンドが使える。
+- 使い分け
+  - 同梱のRedisWrapperも KeyValueStore interface を持っているので一瞬で切り替えることが可能。状況に応じてどうぞ。
+  - こちらはきちんとロックする。楽観ロックではない。IsLocked() コマンドが使える。
+  - こちらのListは内部的にはスライスによる実装である。Redisの双方向連結リストとは異なる。
 
 ## Redis並の速度が出る
 - Goアプリ上で動かすので速い
@@ -30,7 +31,7 @@
 - MULTIGET / MULTISET があるので N+1問題にも対応可能
 
 
-## ベンチマークと動作テスト
+## ベンチマークと動作テスト TODO:
 
 - syncmap / rediswrapper の速度の比較と動作テスト keyvaluestore.go でしています
 - User struct を作り、それをむちゃくちゃな回数 Get / Set しまくるコード
@@ -74,11 +75,11 @@ gob + parallel  (50並列)
 	-  DB.Update() -> redis.Transaction.Set(){} -> (Commit() / RollBack())
 
 # やるだけ
-
 1. TODO: トランザクションの強化(テストの充実)
-1. TODO: list の速度検証 -> LRange / LPop / RPop
-1. TODO: MessagePackが失敗するものを探す(Sliceとかポインターとか)
 1. TODO: goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
-1. TODO: さらにさらにDBの中身ををGoのコードに簡単に吸い出せるようにしたい。
-1. BackUpの検証
-Readを1回に / 使い方 / UserInterface
+1. TODO: さらにDBの中身ををGoのコードに簡単に吸い出せるようにしたい。
+1. TODO: BackUpの動作の検証
+
+
+# 使い方
+TODO:

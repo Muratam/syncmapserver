@@ -200,7 +200,7 @@ func (this *RedisWrapper) LLen(key string) int {
 	} else {
 		size = this.Redis.LLen(key).Val()
 	}
-	return int(size) - 1
+	return int(size)
 }
 func (this *RedisWrapper) LIndex(key string, index int, value interface{}) bool {
 	this.CheckNotSet()
@@ -225,7 +225,20 @@ func (this *RedisWrapper) LSet(key string, index int, value interface{}) {
 		this.Redis.LSet(key, int64(index), encodeToBytes(value))
 	}
 }
-
+func (this *RedisWrapper) LRange(key string, startIndex, stopIncludingIndex int) LRangeResult {
+	this.CheckNotSet()
+	var strResult []string
+	if this.IsTransactionNow() {
+		strResult = this.tx.LRange(key, int64(startIndex), int64(stopIncludingIndex)).Val()
+	} else {
+		strResult = this.Redis.LRange(key, int64(startIndex), int64(stopIncludingIndex)).Val()
+	}
+	result := make([][]byte, len(strResult))
+	for i := 0; i < len(result); i++ {
+		result[i] = []byte(strResult[i])
+	}
+	return NewLRangeResult(result)
+}
 func (this *RedisWrapper) Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool) {
 	return this.TransactionWithKeys([]string{key}, f)
 }
