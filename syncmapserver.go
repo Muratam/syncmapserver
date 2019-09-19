@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -665,8 +666,8 @@ func (this SyncMapServerConn) parseIsLockedKey(input [][]byte) []byte {
 	return encodeToBytes(this.IsLockedKey(string(input[1])))
 }
 
-// キーはソート済みを想定
 func (this SyncMapServerConn) lockKeys(keys []string) {
+	// キーはソート済みを想定
 	for _, key := range keys {
 		m, ok := this.server.mutexMap.Load(key)
 		if !ok {
@@ -678,8 +679,8 @@ func (this SyncMapServerConn) lockKeys(keys []string) {
 	}
 }
 
-// キーはソート済みを想定
 func (this SyncMapServerConn) unlockKeys(keys []string) {
+	// キーはソート済みを想定
 	for i := len(keys) - 1; i >= 0; i-- {
 		key := keys[i]
 		m, ok := this.server.mutexMap.Load(key)
@@ -690,13 +691,18 @@ func (this SyncMapServerConn) unlockKeys(keys []string) {
 		m.(*sync.Mutex).Unlock()
 	}
 }
-
-// TODO: キーをソートしたりロックしたりコネクションを専有したり
 func (this SyncMapServerConn) Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool) {
 	return this.TransactionWithKeys([]string{key}, f)
 }
-func (this SyncMapServerConn) TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool) {
+func (this SyncMapServerConn) TransactionWithKeys(keysBase []string, f func(tx KeyValueStoreConn)) (isok bool) {
+	keys := keysBase
+	if len(keys) > 1 { // デッドロックを防ぐためにソートしておく
+		keys = make([]string, len(keysBase))
+		copy(keys, keysBase)
+		sort.Sort(sort.StringSlice(keys))
+	}
 	if this.IsMasterServer() {
+		// サーバー側はそのまま
 		this.lockKeys(keys)
 		f(this)
 		this.unlockKeys(keys)
@@ -1011,6 +1017,7 @@ func (this SyncMapServerConn) sendBySlave(packet []byte) []byte {
 	}
 	writeAll(conn, packet)
 	result := readAll(conn)
+	// もしも Transaction 開始ならLockする
 	this.server.connectionPool[poolIndex] = conn
 	this.server.connectionPoolStatus[poolIndex] = ConnectionPoolStatusEmpty
 	this.server.connectionPoolEmptyIndexStackMutex.Lock()
