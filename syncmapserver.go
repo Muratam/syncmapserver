@@ -167,6 +167,9 @@ func readAll(conn net.Conn) []byte {
 	var bufAll []byte
 	readMax := defaultReadBufferSize
 	currentReadLen := 0
+	// 検証結果より
+	// 2回 Read を呼び出しているが、適切なサイズの buffer を確保できて効率が良いため、
+	// Read を 1回だけに絞るよりも 1回目でサイズを固定して 2回から適切にやっていくほうが効率がよい
 	if true {
 		buf := make([]byte, 4)
 		readBufNum, err := conn.Read(buf)
