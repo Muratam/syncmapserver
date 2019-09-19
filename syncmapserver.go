@@ -164,6 +164,9 @@ func min(a, b int) int {
 }
 func readAll(conn net.Conn) []byte {
 	contentLen := 0
+	var bufAll []byte
+	readMax := defaultReadBufferSize
+	currentReadLen := 0
 	if true {
 		buf := make([]byte, 4)
 		readBufNum, err := conn.Read(buf)
@@ -181,32 +184,31 @@ func readAll(conn net.Conn) []byte {
 		if err != nil {
 			log.Panic(err)
 		}
+		bufAll = make([]byte, contentLen)
 	}
-	readMax := defaultReadBufferSize
-	var bufAll []byte
-	currentReadLen := 0
 	for currentReadLen < contentLen {
 		readLen := min(readMax, contentLen-currentReadLen)
 		buf := make([]byte, readLen)
 		readBufNum, err := conn.Read(buf)
-		if err != nil {
-			if err == io.EOF {
-				if currentReadLen+readBufNum != contentLen {
-					log.Panic("invalid len TCP")
-				}
-				return append(bufAll, buf[:readBufNum]...)
-			} else {
-				log.Panic(err)
-			}
+		if err != nil && err != io.EOF {
+			log.Panic(err)
 		}
 		if readBufNum == 0 {
 			continue
 		}
+		for i := 0; i < readBufNum; i++ {
+			bufAll[i+currentReadLen] = buf[i]
+		}
 		currentReadLen += readBufNum
-		bufAll = append(bufAll, buf[:readBufNum]...)
+		if err == io.EOF {
+			if currentReadLen+readBufNum != contentLen {
+				log.Panic("invalid len TCP")
+			}
+			return bufAll
+		}
 	}
-	if currentReadLen > contentLen {
-		log.Panic("Too Long Get")
+	if currentReadLen != contentLen {
+		log.Panic("invalid len TPC !!")
 	}
 	return bufAll
 }
