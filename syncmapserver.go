@@ -19,15 +19,16 @@ import (
 
 // 同時にリクエストされるGoroutine の数がこれに比べて多いと性能が落ちる。
 // かといってものすごい多いと peer する. 16 ~ 100 くらいが安定か？アクセス過多な場合は仕方ない。
-const maxSyncMapServerConnectionNum = 512
-const defaultReadBufferSize = 8192                  // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
-const RedisHostPrivateIPAddress = "192.168.111.111" // ここで指定したサーバーに
+const maxSyncMapServerConnectionNum = 50
+const defaultReadBufferSize = 8192                 // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
+const RedisHostPrivateIPAddress = "172.24.122.185" // ここで指定したサーバーに(Redis /SyncMapServerを) 建てる
 // `NewSyncMapServerConn(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
 const SyncMapBackUpPath = "./syncmapbackup-" // カレントディレクトリにバックアップを作成。パーミッションに注意。
+const InitMarkPath = "./init-"               // 初期化データ
 // 起動後この秒数毎にバックアップファイルを作成する(デフォルトでBackUpが作成される設定)
 // /initialize の 120秒後にBackUpとかが多分いい感じかも。
 // Redis は save 900 1 \n save 300 10 \n save 60 10000 とかを手動で設定ファイルに書くとよさそう
-const DefaultBackUpTimeSecond = 30
+const DefaultBackUpTimeSecond = 120
 
 // 一人がロック中に他のロックしていない人が値を書き換えることができるが問題はないはず
 //  ↑ 整合性が必要なデータかつ不必要なデータということになるので、そんなことは起こらないはず
@@ -65,6 +66,9 @@ type SyncMapServer struct {
 	connectionPoolEmptyChannel chan int
 	// 関数をカスタマイズする用.強引に複数台で同期したいときに便利。
 	MySendCustomFunction func(this *SyncMapServerConn, buf []byte) []byte
+	// 初期化の方法を記す。 .Initialize  が呼ばれた時にこれで初期化する
+	// InitMarkPath(./init-) があればそれを読んで初期化関数は無視するし、なければ初期化関数を実行する。
+	InitializeFunction func()
 }
 
 const ( // connectionPoolStatus
@@ -101,10 +105,11 @@ type KeyValueStoreConn interface { // ptr は参照を着けてLoadすること�
 	RPop(key string, value interface{}) bool              // ptr (キーが無ければ false)
 	LSet(key string, index int, value interface{})
 	LRange(key string, startIndex, stopIncludingIndex int) LRangeResult // ptr (0,-1 で全て取得可能) (負数の場合はPythonと同じような処理(stopIncludingIndexがPythonより1多い)) [a,b,c][0:-1] はPythonでは最後を含まないがこちらは含む
-
 	// IsLocked(key string) は Redis には存在しない
 	Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool)
 	TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool)
+	// ISUCONで初期化の負荷を軽減するために使う
+	Initialize()
 }
 
 // 一旦 MGetResult を経由することで、重複するキーのロードを一回のロードで済ませられる
@@ -140,8 +145,9 @@ const ( // COMMANDS
 	syncMapCommandUnlockKey   = "LU" // unlock a key
 	syncMapCommandIsLockedKey = "LI" // check is locked key
 	// そのほか
-	syncMapCommandFlushAll = "FLUSHALL"
-	syncMapCommandCustom   = "CUSTOM" // custom
+	syncMapCommandFlushAll   = "FLUSHALL"
+	syncMapCommandCustom     = "CUSTOM" // custom
+	syncMapCommandInitialize = "INITIALIZE"
 	// check lock
 	syncMapCommandIncrByWithLock = "I_WL"
 	syncMapCommandRPushWithLock  = "RPUSH_WL"
@@ -400,6 +406,8 @@ func (this *SyncMapServerConn) interpretWrapFunction(buf []byte) []byte {
 	// Custom Command
 	case syncMapCommandCustom:
 		return this.parseCustomFunction(input)
+	case syncMapCommandInitialize:
+		this.Initialize()
 	case syncMapCommandFlushAll:
 		this.FlushAll()
 	default:
@@ -984,10 +992,12 @@ func NewSyncMapServerConn(substanceAddress string, isMaster bool) *SyncMapServer
 		port, _ := strconv.Atoi(strings.Split(substanceAddress, ":")[1])
 		result := newMasterSyncMapServer(port)
 		result.MySendCustomFunction = DefaultSendCustomFunction
+		result.InitializeFunction = func() {}
 		return result.GetConn()
 	} else {
 		result := newSlaveSyncMapServer(substanceAddress)
 		result.MySendCustomFunction = DefaultSendCustomFunction
+		result.InitializeFunction = func() {}
 		return result.GetConn()
 	}
 }
@@ -1044,7 +1054,7 @@ func newMasterSyncMapServer(port int) *SyncMapServer {
 	// 何も設定しなければecho
 	this.MySendCustomFunction = DefaultSendCustomFunction
 	// バックアップファイルが見つかればそれを読み込む
-	this.readFile()
+	this.readFile(this.getDefaultPath())
 	// バックアッププロセスを開始する
 	this.startBackUpProcess()
 	return &this
@@ -1068,10 +1078,10 @@ func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	// Redisがそういう仕組みなのでこちらもそのようにしておく
 	return &this
 }
-func (this *SyncMapServer) getPath() string {
+func (this *SyncMapServer) getDefaultPath() string {
 	return SyncMapBackUpPath + strconv.Itoa(this.masterPort) + ".sm"
 }
-func (this *SyncMapServer) writeFile() {
+func (this *SyncMapServer) writeFile(path string) {
 	if !this.IsMasterServer() {
 		return
 	}
@@ -1092,23 +1102,23 @@ func (this *SyncMapServer) writeFile() {
 		result = append(result, here)
 		return true
 	})
-	file, err := os.Create(this.getPath())
+	file, err := os.Create(path)
 	if err != nil {
 		panic(err)
 	}
 	defer file.Close()
 	file.Write(encodeToBytes(result))
 }
-func (this *SyncMapServer) readFile() {
+func (this *SyncMapServer) readFile(path string) error {
 	if !this.IsMasterServer() {
-		return
+		return nil
 	}
 	// Lock ?
-	encoded, err := ioutil.ReadFile(this.getPath())
+	encoded, err := ioutil.ReadFile(path)
 	if err != nil {
-		// fmt.Println("no " + this.getPath() + "exists.")
-		return
+		return err
 	}
+	// 読み込めなければデータはそのまま
 	conn := this.GetConn()
 	conn.FlushAll()
 	var decoded [][][]byte
@@ -1124,12 +1134,37 @@ func (this *SyncMapServer) readFile() {
 			panic(nil)
 		}
 	}
+	return nil
 }
 func (this *SyncMapServer) startBackUpProcess() {
 	go func() {
 		time.Sleep(time.Duration(DefaultBackUpTimeSecond) * time.Second)
-		this.writeFile()
+		this.writeFile(this.getDefaultPath())
 	}()
+}
+
+// 初期化データがあればそれをロード。なければ初期化の方法を書く
+func (this *SyncMapServerConn) Initialize() {
+	log.Println("INIT 1:", this.DBSize())
+	if this.IsMasterServer() {
+		path := InitMarkPath + strconv.Itoa(this.server.masterPort) + ".sm"
+		log.Println("INIT 2:", this.DBSize())
+		err := this.server.readFile(path)
+		log.Println("INIT 3:", this.DBSize())
+		if err == nil { // 読み込めたので何もしない
+			return
+		}
+		log.Println("INIT 4:", this.DBSize())
+		this.FlushAll()
+		log.Println("INIT 5:", this.DBSize())
+		this.server.InitializeFunction()
+		log.Println("INIT 6:", this.DBSize())
+		this.server.writeFile(path)
+		log.Println("INIT 7:", this.DBSize())
+	} else {
+		this.send(syncMapCommandInitialize)
+	}
+	log.Println("INITIALIZZED:", this.DBSize())
 }
 
 // 自身の SyncMapからLoad / 変更できるようにpointer型で受け取ること

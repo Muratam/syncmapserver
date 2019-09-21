@@ -4,29 +4,36 @@ package main
 // どうせシリアライズする必要があるので、 int 値以外は全て[]byteにしている。
 //  (int値は IncrByの都合上そのまま置く必要があるので[]byteにしていない)
 import (
+	"fmt"
 	"log"
 	"strconv"
 
 	"github.com/go-redis/redis"
 )
 
+type WithInitializeFunciton struct {
+	InitializeFunction func()
+}
+
 type RedisWrapper struct {
 	Redis        *redis.Client
 	tx           *redis.Tx
 	pipe         *redis.Pipeliner
 	isAlreadySet bool // Transaction時に既に変更を加えるコマンドを行ったか
+	server       WithInitializeFunciton
 }
 
-func NewRedisWrapper(address string) *RedisWrapper {
+func NewRedisWrapper(address string, dbNumber int) *RedisWrapper {
 	return &RedisWrapper{
 		Redis: redis.NewClient(&redis.Options{
-			Addr:     address,
-			Password: "", // no password set
-			DB:       0,  // use default DB
+			Addr:     address + ":6379",
+			Password: "",       // no password set
+			DB:       dbNumber, // use default DB
 		}),
 		tx:           nil,
 		pipe:         nil,
 		isAlreadySet: false,
+		server:       WithInitializeFunciton{func() {}},
 	}
 }
 func (this *RedisWrapper) New() *RedisWrapper {
@@ -35,6 +42,7 @@ func (this *RedisWrapper) New() *RedisWrapper {
 		tx:           nil,
 		pipe:         nil,
 		isAlreadySet: false,
+		server:       WithInitializeFunciton{func() {}},
 	}
 }
 func (this *RedisWrapper) IsTransactionNow() bool {
@@ -80,10 +88,14 @@ func (this *RedisWrapper) Set(key string, value interface{}) {
 	if _, ok := value.(int); !ok {
 		value = encodeToBytes(value)
 	}
+	var err error
 	if this.IsTransactionNow() {
-		(*this.pipe).Set(key, value, 0)
+		err = (*this.pipe).Set(key, value, 0).Err()
 	} else {
-		this.Redis.Set(key, value, 0)
+		err = this.Redis.Set(key, value, 0).Err()
+	}
+	if err != nil {
+		fmt.Println("Redis Error", err)
 	}
 }
 func (this *RedisWrapper) MGet(keys []string) MGetResult {
@@ -291,4 +303,8 @@ func (this *RedisWrapper) TransactionWithKeys(keys []string, f func(tx KeyValueS
 		return err
 	}, keys...)
 	return err == nil
+}
+func (this *RedisWrapper) Initialize() {
+	this.FlushAll()
+	this.server.InitializeFunction()
 }

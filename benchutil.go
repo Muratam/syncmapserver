@@ -13,7 +13,7 @@ import (
 // NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) のように ISUCON本本では使う
 var smMaster = NewSyncMapServerConn("127.0.0.1:8080", true)
 var smSlave = NewSyncMapServerConn("127.0.0.1:8080", false)
-var redisWrap = NewRedisWrapper("127.0.0.1:6379")
+var redisWrap = NewRedisWrapper("127.0.0.1", 0)
 
 var stores = []KeyValueStoreConn{smMaster, smSlave, redisWrap}
 var names = []string{"smMaster", "smSlave ", "redis   "}
