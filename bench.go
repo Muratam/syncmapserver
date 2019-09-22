@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	_ "net/http/pprof"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -80,7 +81,16 @@ func TestMasterSlaveInterpret() {
 			smSlave.Insert(i)
 			smMaster.Insert(i)
 		})
-		assert(smMaster.DBSize() == n*2)
+		keys := smMaster.AllKeys()
+		keyInts := make([]int, len(keys))
+		for i, key := range keys {
+			x, _ := strconv.Atoi(key)
+			keyInts[i] = x
+		}
+		sort.IntSlice(keyInts).Sort()
+		for i := 0; i < n*2; i++ {
+			assert(i+1 == keyInts[i])
+		}
 	}()
 	fmt.Println("-------  Master Slave Test Passed  -------")
 }
