@@ -1,0 +1,26 @@
+
+  digraph  {
+    layout = "neato";
+    overlap=false;
+    splines=false;
+    edge [len=0.0];
+    node [
+      landscape = true,
+      width = 1,
+      height = 1,
+      fontname = "Helvetica",
+      style="filled",
+      fillcolor="#fafafa",
+    ];
+    edge [
+      len=1.8,
+      fontsize="20",
+      // penwidth="2",
+      fontname = "Helvetica",
+      style="dashed",
+    ];
+    init;main;getSession;getCSRFToken;getUser;getUserSimpleByID;getCategoryByID;getConfigByName;getPaymentServiceURL;getShipmentServiceURL;getIndex;postInitialize;getNewItems;getNewCategoryItems;getUserItems;getTransactions;getItem;postItemEdit;getQRCode;postBuy;postShip;postShipDone;postComplete;postSell;secureRandomStr;postBump;getSettings;postLogin;postRegister;getReports;outputErrorMsg;getImageURL;
+    main -> postInitialize;main -> getNewItems;main -> getNewCategoryItems;main -> getTransactions;main -> getUserItems;main -> getItem;main -> postItemEdit;main -> postBuy;main -> postSell;main -> postShip;main -> postShipDone;main -> postComplete;main -> getQRCode;main -> postBump;main -> getSettings;main -> postLogin;main -> postRegister;main -> getReports;main -> getIndex;getCSRFToken -> getSession;getUser -> getSession;getPaymentServiceURL -> getConfigByName;getShipmentServiceURL -> getConfigByName;postInitialize -> outputErrorMsg;postInitialize -> init;getNewItems -> outputErrorMsg;getNewItems -> getUserSimpleByID;getNewItems -> getCategoryByID;getNewItems -> getImageURL;getNewCategoryItems -> outputErrorMsg;getNewCategoryItems -> getCategoryByID;getNewCategoryItems -> getUserSimpleByID;getNewCategoryItems -> getImageURL;getUserItems -> outputErrorMsg;getUserItems -> getUserSimpleByID;getUserItems -> getCategoryByID;getUserItems -> getImageURL;getTransactions -> getUser;getTransactions -> outputErrorMsg;getTransactions -> getUserSimpleByID;getTransactions -> getCategoryByID;getTransactions -> getImageURL;getTransactions -> getShipmentServiceURL;getItem -> outputErrorMsg;getItem -> getUser;getItem -> getCategoryByID;getItem -> getUserSimpleByID;getItem -> getImageURL;postItemEdit -> outputErrorMsg;postItemEdit -> getCSRFToken;postItemEdit -> getUser;getQRCode -> outputErrorMsg;getQRCode -> getUser;postBuy -> outputErrorMsg;postBuy -> getCSRFToken;postBuy -> getUser;postBuy -> getCategoryByID;postBuy -> getShipmentServiceURL;postBuy -> getPaymentServiceURL;postShip -> outputErrorMsg;postShip -> getCSRFToken;postShip -> getUser;postShip -> getShipmentServiceURL;postShipDone -> outputErrorMsg;postShipDone -> getCSRFToken;postShipDone -> getUser;postShipDone -> getShipmentServiceURL;postComplete -> outputErrorMsg;postComplete -> getCSRFToken;postComplete -> getUser;postComplete -> getShipmentServiceURL;postSell -> outputErrorMsg;postSell -> getCSRFToken;postSell -> getCategoryByID;postSell -> getUser;postSell -> secureRandomStr;postBump -> outputErrorMsg;postBump -> getCSRFToken;postBump -> getUser;getSettings -> getCSRFToken;getSettings -> getUser;getSettings -> getPaymentServiceURL;getSettings -> outputErrorMsg;postLogin -> outputErrorMsg;postLogin -> getSession;postLogin -> secureRandomStr;postRegister -> outputErrorMsg;postRegister -> getSession;postRegister -> secureRandomStr;getReports -> outputErrorMsg;getUser -> users;getUser -> users;getCategoryByID -> categories;getConfigByName -> configs;configs -> postInitialize;configs -> postInitialize;getNewItems -> items;getNewItems -> items;getNewCategoryItems -> categories;getNewCategoryItems -> items;getNewCategoryItems -> items;getUserItems -> items;getUserItems -> items;getTransactions -> items;getTransactions -> items;getTransactions -> transaction_evidences;getTransactions -> shippings;getItem -> items;getItem -> transaction_evidences;getItem -> shippings;postItemEdit -> items;postItemEdit -> items;items -> postItemEdit;postItemEdit -> items;getQRCode -> transaction_evidences;getQRCode -> shippings;postBuy -> items;postBuy -> users;transaction_evidences -> postBuy;items -> postBuy;shippings -> postBuy;postShip -> transaction_evidences;postShip -> items;postShip -> transaction_evidences;postShip -> shippings;shippings -> postShip;postShipDone -> transaction_evidences;postShipDone -> items;postShipDone -> transaction_evidences;postShipDone -> shippings;shippings -> postShipDone;transaction_evidences -> postShipDone;postComplete -> transaction_evidences;postComplete -> items;postComplete -> transaction_evidences;postComplete -> shippings;shippings -> postComplete;transaction_evidences -> postComplete;items -> postComplete;postSell -> users;items -> postSell;users -> postSell;postBump -> items;postBump -> users;items -> postBump;users -> postBump;postBump -> items;getSettings -> categories;postLogin -> users;users -> postRegister;getReports -> transaction_evidences;
+    
+  }
+  

@@ -7,34 +7,30 @@
 // 3. SQL文を含む関数一覧が取れるので関数同士の依存関係のグラフも生成できる。
 // 4. SQLをパースして、テーブルとの関係を取得してgraphvizする。
 
-// const { Parser } = require("node-sql-parser");
-// const parser = new Parser();
-function getTableName(query) {
-  query = query.trim().replace(/[\t\n]/g, " ")
-  let commands = query.split(" ")
-  let queryType = commands[0].toUpperCase()
-  let target = {
-    "SELECT": "FROM",
-    "UPDATE": "UPDATE",
-    "INSERT": "INTO",
-    "DELETE": "FROM",
-  }[queryType]
-  for (let i = 0; i < commands.length; i++) {
-    let command = commands[i].toUpperCase();
-    if (command !== target) {
-      continue;
-    }
-    return [commands[i + 1].replace(/[^_0-9a-zA-Z]/g, ""), queryType];
-  }
-  console.error("ERROR!")
-}
-
 const fs = require("fs")
-function parseFile(filename) {
+function parseGoSQLRelation(content) {
   function escape(s) {
     return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')
   }
-  let content = fs.readFileSync(filename, "utf8")
+  function getTableName(query) {
+    query = query.trim().replace(/[\t\n]/g, " ")
+    let commands = query.split(" ")
+    let queryType = commands[0].toUpperCase()
+    let target = {
+      "SELECT": "FROM",
+      "UPDATE": "UPDATE",
+      "INSERT": "INTO",
+      "DELETE": "FROM",
+    }[queryType]
+    for (let i = 0; i < commands.length; i++) {
+      let command = commands[i].toUpperCase();
+      if (command !== target) {
+        continue;
+      }
+      return [commands[i + 1].replace(/[^_0-9a-zA-Z]/g, ""), queryType];
+    }
+    console.error("ERROR!")
+  }
   // 見つかった関数
   let textIndexToFuncName = new Array(content.length);
   let functionNames = []
@@ -82,12 +78,75 @@ function parseFile(filename) {
   for (let key in havingFunctionsMap) {
     havingFunctionsMap[key] = Array.from(new Set(havingFunctionsMap[key]))
   }
-  console.log(functionNames)
-  console.log(havingFunctionsMap)
-  console.log(functionNameToSQL)
+  return {
+    functionNames,
+    havingFunctionsMap,
+    functionNameToSQL
+  }
+}
+function joinFiles(filenames) {
+  let content = ""
+  for (let filename of filenames) {
+    if (!filename.endsWith(".go")) continue;
+    content += fs.readFileSync(filename, "utf8")
+  }
+  return content
+}
+function writeDot(parsed) {
+  let { functionNames, havingFunctionsMap, functionNameToSQL } = parsed
+  let funcStr = ""
+  for (let func of functionNames) {
+    funcStr += `${func};`
+  }
+  let funcRel = ""
+  for (let src in havingFunctionsMap) {
+    for (let dst of havingFunctionsMap[src]) {
+      funcRel += `${src} -> ${dst};`
+    }
+  }
+  let tableRel = ""
+  for (let src in functionNameToSQL) {
+    for (let dst of functionNameToSQL[src]) {
+      // dst.query : all of query
+      // dst.type  : "SELECT" / "INSERT" / ...
+      if (dst.type === "SELECT") {
+        funcRel += `${src} -> ${dst.table};`
+      } else { // INSERT / DELETE / UPDATE
+        funcRel += `${dst.table} -> ${src};`
+      }
+    }
+  }
+
+  return `
+  digraph  {
+    layout = "neato";
+    overlap=false;
+    splines=false;
+    edge [len=0.0];
+    node [
+      landscape = true,
+      width = 1,
+      height = 1,
+      fontname = "Helvetica",
+      style="filled",
+      fillcolor="#fafafa",
+    ];
+    edge [
+      len=1.8,
+      fontsize="20",
+      // penwidth="2",
+      fontname = "Helvetica",
+      style="dashed",
+    ];
+    ${funcStr}
+    ${funcRel}
+    ${tableRel}
+  }
+  `
 }
 
-for (let filename of process.argv) {
-  if (!filename.endsWith(".go")) continue;
-  parseFile(filename)
-}
+// 除外したい場合もあるだろうので、 `node sqlmap.js ./*.go` みたいにするのがいいかな
+let joinedContents = joinFiles(process.argv)
+let parsed = parseGoSQLRelation(joinedContents)
+let dotted = writeDot(parsed)
+fs.writeFileSync("sqlmap.dot", dotted)
