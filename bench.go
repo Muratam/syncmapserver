@@ -384,12 +384,8 @@ func BenchParallelUserGetSetPopular(conn KeyValueStoreConn) {
 		localMap[key] = localUserMap4000[key]
 	}
 	conn.MSet(localMap)
-	ExecuteImpl(10000, true, 1000, func(i int) {
-		key := keys4000[i%400]
-		n := 200
-		if i < n {
-			key = keys4000[0]
-		}
+	ExecuteImpl(8000, true, 1000, func(i int) {
+		key := keys4000[i%4000]
 		for !conn.Transaction(key, func(tx KeyValueStoreConn) {
 			proValue := User{}
 			tx.Get(key, &proValue)
