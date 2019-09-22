@@ -73,6 +73,15 @@ func TestMasterSlaveInterpret() {
 		assert(eqTree(src, dst1))
 		assert(eqTree(src, dst2))
 	}()
+	func() { // INSERT
+		smSlave.FlushAll()
+		n := 10000
+		Execute(n, true, func(i int) {
+			smSlave.Insert(i)
+			smMaster.Insert(i)
+		})
+		assert(smMaster.DBSize() == n*2)
+	}()
 	fmt.Println("-------  Master Slave Test Passed  -------")
 }
 

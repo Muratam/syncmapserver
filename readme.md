@@ -69,8 +69,3 @@ AVERAGE:
 
 # 使い方
 bench.go / test/backuptest.go とかを読んだら分かるはず、Redis互換なので.
-
-# TODO: これからやっていきたいこと
-1. goコードの中からSQLを吸い出したい(過去のISUCON全てで読めるようになっていれば良さそう)
-  - GOCODE(func) -> [INSERT / UPDATE] -> SQLTABLE -> [ SELECT ] -> GOCODE なグラフ
-  - 直列な部分は GOCODE -> GOCODE になる

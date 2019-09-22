@@ -141,11 +141,12 @@ const ( // COMMANDS
 	syncMapCommandLRange = "LRANGE" // get list of range
 	// 特定のキーをLockする。
 	// それが解除されていれば、 特定のキーをロックする。
-	syncMapCommandLockKey     = "LL" // lock a key
-	syncMapCommandUnlockKey   = "LU" // unlock a key
-	syncMapCommandIsLockedKey = "LI" // check is locked key
+	syncMapCommandLockKey   = "LL" // lock a key
+	syncMapCommandUnlockKey = "LU" // unlock a key
+	syncMapCommandIsLocked  = "LI" // check is locked key
 	// そのほか
 	syncMapCommandFlushAll   = "FLUSHALL"
+	syncMapCommandInsert     = "INSERT"
 	syncMapCommandCustom     = "CUSTOM" // custom
 	syncMapCommandInitialize = "INITIALIZE"
 	// check lock
@@ -376,6 +377,8 @@ func (this *SyncMapServerConn) interpretWrapFunction(buf []byte) []byte {
 		return this.parseDBSize(input)
 	case syncMapCommandAllKeys:
 		return this.parseAllKeys()
+	case syncMapCommandInsert:
+		return this.parseInsert(input)
 	// List Command
 	case syncMapCommandRPush:
 		return this.parseRPush(input)
@@ -397,8 +400,8 @@ func (this *SyncMapServerConn) interpretWrapFunction(buf []byte) []byte {
 		this.parseLSet(input)
 	case syncMapCommandLRange:
 		return this.parseLRange(input)
-	case syncMapCommandIsLockedKey:
-		return this.parseIsLockedKey(input)
+	case syncMapCommandIsLocked:
+		return this.parseIsLocked(input)
 	case syncMapCommandLockKey:
 		this.parseLockKeys(input)
 	case syncMapCommandUnlockKey:
@@ -868,11 +871,8 @@ func (this *LRangeResult) Len() int {
 	return len(this.resultArray)
 }
 
-// func (this *SyncMapServerConn) LRange(key string, startIndex, stopIncludingIndex int, values []interface{}) {
-// }
-
 // トランザクション
-func (this *SyncMapServerConn) IsLockedKey(key string) bool {
+func (this *SyncMapServerConn) IsLocked(key string) bool {
 	if this.IsMasterServer() {
 		locked, ok := this.server.lockedMap.Load(key)
 		if !ok {
@@ -880,11 +880,11 @@ func (this *SyncMapServerConn) IsLockedKey(key string) bool {
 		}
 		return locked.(bool)
 	} else {
-		return decodeBool(this.send(syncMapCommandIsLockedKey, []byte(key)))
+		return decodeBool(this.send(syncMapCommandIsLocked, []byte(key)))
 	}
 }
-func (this *SyncMapServerConn) parseIsLockedKey(input [][]byte) []byte {
-	return encodeToBytes(this.IsLockedKey(string(input[1])))
+func (this *SyncMapServerConn) parseIsLocked(input [][]byte) []byte {
+	return encodeToBytes(this.IsLocked(string(input[1])))
 }
 
 func (this *SyncMapServerConn) lockKeysDirect(keys []string) {
@@ -917,6 +917,63 @@ func (this *SyncMapServerConn) unlockKeysDirect(keys []string) {
 	}
 	this.lockedKeys = []string{}
 }
+
+// INSERTを便利なように (通常 offset は 1)
+// func (this *SyncMapServerConn) Set(key string, value interface{}) {
+// 	if this.IsMasterServer() {
+// 		this.storeDirectWithEncoding(key, value)
+// 	} else {
+// 		this.send(syncMapCommandSet, []byte(key), encodeToBytes(value))
+// 	}
+// }
+// func (this *SyncMapServerConn) parseSet(input [][]byte) {
+// 	this.storeDirect(string(input[1]), input[2])
+// }
+// key-value型 で IDからオンメモリにしてるときに使える.IDが1から始まると仮定する。
+func (this *SyncMapServerConn) insertImpl(value []byte) int {
+	for {
+		keyInt := int(this.server.keyCount + 1)
+		key := strconv.Itoa(keyInt)
+		this.lockKeysDirect([]string{key})
+		if this.Exists(key) {
+			this.unlockKeysDirect([]string{key})
+			continue
+		}
+		this.storeDirect(key, value)
+		this.unlockKeysDirect([]string{key})
+		return keyInt
+	}
+}
+func (this *SyncMapServerConn) Insert(value interface{}) int {
+	if this.IsMasterServer() {
+		return this.insertImpl(encodeToBytes(value))
+	} else {
+		return decodeInt(this.send(syncMapCommandInsert, encodeToBytes(value)))
+	}
+}
+func (this *SyncMapServerConn) parseInsert(input [][]byte) []byte {
+	return encodeToBytes(this.insertImpl(input[1]))
+}
+
+// 	for {
+// 		id := this.DBSize() + offset
+// 		idstr := strconv.Itoa(id)
+// 		alreadyExists := false
+// 		this.Transaction(idstr, func(tx KeyValueStoreConn) {
+// 			if tx.Exists(idstr) {
+// 				alreadyExists = true
+// 				return
+// 			}
+// 			tx.Set(idStr, value)
+// 			alreadyExists = false
+// 		})
+// 		if !alreadyExists {
+// 			return id
+// 		}
+// 	}
+// 	return -1
+// }
+
 func (this *SyncMapServerConn) Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool) {
 	return this.TransactionWithKeys([]string{key}, f)
 }
