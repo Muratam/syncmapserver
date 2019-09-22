@@ -74,13 +74,13 @@ var isMasterServerIP = MyServerIsOnMasterServerIP()
 var idToUserServer = NewSyncMapServerConn(GetMasterServerAddress()+":8884", isMasterServerIP)
 
 func main(){
-	u := randUser() // テスト用のランダムに User Struct を作成する関数
-	idToUserServer.Set("hoge", u) // シリアライズは中で勝手にやってくれる
-	var u2 User
-	idToUserServer.Get("hoge", &u2) // 読み込みなので & をつける
-	assert(u == u2) // 同一になる(time.Now()は .Truncate(time.Second)すること！)
-	ok := conn.Get("piyo", &u) // 存在しないキーなので ok == false になる。
-	assert(!ok)
+  u := randUser() // テスト用のランダムに User Struct を作成する関数
+  idToUserServer.Set("hoge", u) // シリアライズは中で勝手にやってくれる
+  var u2 User
+  idToUserServer.Get("hoge", &u2) // 読み込みなので & をつける
+  assert(u == u2) // 同一になる(time.Now()は .Truncate(time.Second)すること！)
+  ok := conn.Get("piyo", &u) // 存在しないキーなので ok == false になる。
+  assert(!ok)
 }
 ```
 
@@ -91,26 +91,25 @@ func main(){
 func main(){
   conn := idToUserServer
   // MSet は map[string]interface{}{} を作ってそれを渡すことで実行する。
-	var keys []string
-	localMap := map[string]interface{}{}
-	for i := 0; i < 1000; i++ {
-		key := "k" + strconv.Itoa(i)
-		localMap[key] = randUser()
-		keys = append(keys, key)
-	}
+  var keys []string
+  localMap := map[string]interface{}{}
+  for i := 0; i < 1000; i++ {
+    key := "k" + strconv.Itoa(i)
+    localMap[key] = randUser()
+    keys = append(keys, key)
+  }
   conn.MSet(localMap)
   // 保存できている。
-	var v8 User
-	conn.Get("k8", &v8)
+  var v8 User
+  conn.Get("k8", &v8)
   assert(v8 == localMap["k8"])
   // MGetResult 型で帰ってくる。Len() / Get() が使える。
-	mgetResult := conn.MGet(keys)
-	for key, preValue := range localMap {
-		var proValue User
-		mgetResult.Get(key, &proValue)
-		assert(proValue == preValue)
-	}
-
+  mgetResult := conn.MGet(keys)
+  for key, preValue := range localMap {
+    var proValue User
+    mgetResult.Get(key, &proValue)
+    assert(proValue == preValue)
+  }
 }
 ```
 
@@ -120,8 +119,8 @@ func main(){
   conn.Set("a", 0)
   for i := 0 ; i < 2500 ; i ++ {
     go func(){
-      // Redisは楽観ロックなので成功するまでやる
-      // SyncMapServerはロックを取るので成功する
+      // SyncMapServerはロックを取るので成功するのでTransaction()は必ずtrueになる。
+      // Redisは楽観ロックなので成功するまでやる。Tranasction()を失敗するとfalse(その場合結果は反映されない).
       // 存在しないキーへのロックも大丈夫だよ
       for !conn.Transaction("a", func(tx KeyValueStoreConn) {
         x := 0
@@ -132,9 +131,28 @@ func main(){
     }()
   })
   // トランザクションをしたけど実は普通は IncrByを使えばいいテストでした。
-	assert(conn.IncrBy("a", 0) == 25000)
+  assert(conn.IncrBy("a", 0) == 25000)
 }
 ```
+
+- 互換性を持ったままRedisにする例
+```go
+// 0番DBの指定したIPのところのRedisにつなぐ
+var idToUserServer = NewRedisWrapper("127.0.0.1", 0)
+
+func main(){
+  // あとは SyncMapServer のものと全く同じコードでよい。(楽観ロックが異なるTransaction以外は)
+  u := randUser()
+  idToUserServer.Set("hoge", u)
+  var u2 User
+  idToUserServer.Get("hoge", &u2)
+  assert(u == u2)
+  ok := conn.Get("piyo", &u)
+  assert(!ok)
+}
+
+```
+
 
 ## ベンチマークと動作テスト
 
@@ -224,5 +242,5 @@ redis    : 275 ms
 - keys は中でソートされるので、(DAGができるので)デッドロックは発生しないはず。
 - Redis は楽観ロックなので,この中の関数が楽観ロックに失敗した場合に成功するまで実行され続けることに注意。
 - Redis版では Set 系操作の後に Get 系操作があったらエラーがでるようになってる。
-	- isok: SyncMapServerの場合は必ず成功する。/ Redis の場合は失敗するかもしれない(その場合はデータの変更が発生しない) => Commit()の直前なので Rollback()すればよい。
-	-  DB.Update() -> redis.Transaction.Set(){} -> (Commit() / RollBack())
+  - isok: SyncMapServerの場合は必ず成功する。/ Redis の場合は失敗するかもしれない(その場合はデータの変更が発生しない) => Commit()の直前なので Rollback()すればよい。
+  -  DB.Update() -> redis.Transaction.Set(){} -> (Commit() / RollBack())
