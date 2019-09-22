@@ -1,17 +1,28 @@
 // NOTE: 都合上省きたいものもあるだろう！
-const ignoreFuncNames = ["main", "unsafeParseDate", "NewHandler", "InitBenchmark"]
+const ignoreFuncNames = [
+  "main",
+  "getInitialize", "wsGameHandler", "NewHandler", "InitBenchmark",
+]
+// NOTE: 都合上無視したいテーブルもあるだろう！
+const ignoreTableNames = ["SHA2", "floor"]
 // NOTE: 都合上関数同士の関係を省きたいときもあるだろう！
 const ignoreFunctionRelativity = false;
-// NOTE: 見にくいレイアウトはいやだろう！ dot, fdp, neato, sfdp, twopi
+// NOTE: 見にくいレイアウトはいやだろう！ dot, fdp, twopi
 const layoutType = "dot";
 
 const fs = require("fs")
 function parseGoSQLRelation(content) {
-  content = content.replace(/\/\/.*\n/g, "")
+  content = content.replace(/\/\/.*\n/g, "") // コメント除去
+  content = content.replace(/\/\*.*\*\//g, "") // コメント除去
+  content = content.replace(/\t\n/g, " ") // 空白
+  content = content.replace(/\s+/g, " ")
+  content = content.replace(/"\s*\+\s*"/g, "") // 文字列結合
+  content = content.replace(/`\s*\+\s*`/g, "") // 文字列結合
+
   function escape(s) {
     return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')
   }
-  function getTableName(query) {
+  function getTableName(query, functionName) {
     query = query.trim().replace(/[\t\n]/g, " ")
     let commands = query.split(" ")
     let queryType = commands[0].toUpperCase()
@@ -26,10 +37,19 @@ function parseGoSQLRelation(content) {
       if (command !== target) {
         continue;
       }
-      return [commands[i + 1].replace(/[^_0-9a-zA-Z]/g, ""), queryType];
+      let table = commands[i + 1].replace(/[^_0-9a-zA-Z]/g, "");
+      if (table === "") continue;
+      return [table, queryType];
     }
-    console.error("ERROR QUERY (splited ?)!!")
-    console.error(query)
+    if (queryType === "INSERT") {
+      if (commands.length > 1) return [commands[1], queryType]
+    }
+    if (queryType === "SELECT") {
+      console.log(`WARNING (${functionName}) ${queryType} :: ${query}`)
+      if (commands.length > 1 && commands[1].match(/[_a-zA-Z0-9]+\(/))
+        return [commands[1].replace(/\(.+/, ""), queryType]
+    }
+    console.error(`ERROR (${functionName}) ${queryType} :: ${query}`)
     return ["parse_error", queryType]
   }
   // 見つかった関数
@@ -54,18 +74,27 @@ function parseGoSQLRelation(content) {
   }
   // 見つかったSQL
   // SET ALTER RENAME DROP REPLACE あたりは知らない...
-  let sqlFounds = content.match(/"\s*(SELECT|DELETE|INSERT|UPDATE)\s.+?"/ig) || []
-  for (let other of content.match(/`\s*(SELECT|DELETE|INSERT|UPDATE)\s.+?`/ig) || []) sqlFounds.push(other)
-  preI = 0
   let functionNameToSQL = {}
-  for (let sql of sqlFounds) {
-    let index = content.substring(preI).search(escape(sql)) + preI
-    preI = index
+  for (let matched of content.matchAll(/(?:"\s*(?:SELECT|DELETE|INSERT|UPDATE)\s.+?"|`\s*(?:SELECT|DELETE|INSERT|UPDATE)\s.+?`)/ig)) {
+    let index = matched.index
     let functionName = textIndexToFuncName[index]
-    let normalized = sql.substring(1, sql.length - 1)
-    let [table, queryType] = getTableName(normalized)
+    let query = matched[0]
+    query = query.substring(1, query.length - 1)
+    if (query.substring(1, query.length).match(/SELECT/ig)) {
+      // NOTE: カッコは一つだけとして雑に
+      let innerQuery = query.substring(1, query.length).match(/SELECT\s.+/ig)[0]
+      let [table, queryType] = getTableName(innerQuery, functionName)
+      let stored = { query: innerQuery, table: table, type: queryType }
+      if (table) {
+        functionNameToSQL[functionName] = (functionNameToSQL[functionName] || []).concat(stored)
+        console.log("STORED AT" + functionName)
+      }
+      console.log(`COMPLEX INNER QUERY at ${functionName}`)
+      console.log(stored)
+    }
+    let [table, queryType] = getTableName(query, functionName)
     functionNameToSQL[functionName] = (functionNameToSQL[functionName] || []).concat(
-      { query: normalized, table: table, type: queryType })
+      { query: query, table: table, type: queryType })
   }
   // 見つかったトークン
   for (let found of content.matchAll(/([_0-9a-zA-Z]+)/g)) {
@@ -151,74 +180,73 @@ function writeDot(parsed) {
   }
   let unusedSet = getUnusedFunctionSet()
   let tableRel = ""
-  let usedTableNames = {}
   for (let src in functionNameToSQL) {
     if (ignoreFuncNames.includes(src)) continue;
+    let already = {}
     for (let dst of functionNameToSQL[src]) {
       // dst.query : all of query
       // dst.type  : "SELECT" / "INSERT" / ...
       let label = `[style="bold"]`
-      usedTableNames[dst.table] = true;
+      let tableName = dst.table;
+      if (ignoreTableNames.includes(tableName)) continue;
+      if ((already[dst.type] || {})[tableName]) continue;
+      already[dst.type] = already[dst.type] || {}
+      already[dst.type][tableName] = true;
       if (dst.type === "SELECT") {
-        tableRel += `${dst.table} -> ${src}${label};\n`
+        tableRel += `${tableName} -> ${src}${label};\n`
       } else { // INSERT / DELETE / UPDATE
-        label = `[style="bold",label="${dst.type}",color="blue",fontcolor="blue"]`
-        tableRel += `${src} -> ${dst.table}${label};\n`
+        label = `[style="bold",label="${dst.type}",color="#f08060",fontcolor="#f08060"]`
+        tableRel += `${src} -> ${tableName}${label};\n`
       }
+      if (tableName === "parse_error") tableName = `???`;
+      tableName = tableName.replace(/([a-z])_/g, "$1\n_")
+      tableRel += `${dst.table}[label="${tableName}",shape=box, style="filled, bold, rounded", fillcolor="#ffffcc"];\n`
     }
-  }
-  let tableStr = ""
-  for (let table in usedTableNames) {
-    let tableName = table;
-    if (table === "parse_error") tableName = `???`;
-    tableStr += `${table}[label="${tableName}",shape=box, style="filled, bold, rounded", fillcolor="#ffffcc"];\n`
+    tableRel += `${src}[label="${src.replace(/([a-z])([A-Z])/g, "$1\n$2")}"];\n`
   }
 
   let funcRel = ""
-  let funcStr = ""
   if (!ignoreFunctionRelativity) {
     for (let src in havingFunctionsMap) {
       for (let dst of havingFunctionsMap[src]) {
         if (unusedSet[src] || unusedSet[dst]) continue;
-        funcRel += `${dst} -> ${src};\n`
+        funcRel += `${dst} -> ${src}; \n`
+        funcRel += `${src}[label="${src.replace(/([a-z])([A-Z])/g, "$1\n$2")}"];\n`
+        funcRel += `${dst}[label="${dst.replace(/([a-z])([A-Z])/g, "$1\n$2")}"];\n`
       }
-    }
-    for (let func of functionNames) {
-      if (unusedSet[func]) continue;
-      funcStr += `${func}[label="${func}"];\n`
     }
   }
   return `
-  digraph  {
-    layout = "${layoutType}";
-    overlap = false;
-    splines = false;
-    node [
-      landscape = true,
-      width = 1,
-      height = 1,
-      fontname = "Helvetica",
-      style="filled",
-      fillcolor="#fafafa",
+    digraph  {
+      layout = "${layoutType}";
+      // overlap = false;
+      // splines = true;
+      node[
+        // landscape = true,
+        width = 0.2,
+        height = 0.2,
+        fontname = "Helvetica",
+        style = "filled",
+        fillcolor = "#fafafa",
+        shape = box,
+        style = "filled, bold, rounded"
+      ];
+      edge[
+        len = 0.1,
+        fontsize = "8",
+        fontname = "Helvetica",
+        style = "dashed",
     ];
-    edge [
-      len=0.1,
-      fontsize="8",
-      fontname = "Helvetica",
-      style="dashed",
-    ];
-    ${tableStr}
-    ${funcStr}
-    ${funcRel}
-    ${tableRel}
-  }
-  `
+      ${ funcRel}
+      ${ tableRel}
+    }
+    `
 }
 
 // 引数のパス一覧の中のGoのコード中からSQLの関係図を生成する
 // router.Get("/hoge",func(){...}) みたいなコードは全てflattenした場合を想定。
 // 1. \s*?func\s+?(\S+?)\(.*?\) を関数の始まりのラインとして解釈して、
-// 2. [`"]\s*(SELECT|DELETE|INSERT|UPDATE) .+?[`"] があるものをSQL文として解釈する。
+// 2. [`"]\s*(SELECT|DELETE|INSERT|UPDATE) .+?[`"]があるものをSQL文として解釈する。
 //   - SELECT は依存しているテーブル名を全て抜き出し、 他は...?
 // 3. SQL文を含む関数一覧が取れるので関数同士の依存関係のグラフも生成できる。
 // 4. SQLをパースして、テーブルとの関係を取得してgraphvizする。
