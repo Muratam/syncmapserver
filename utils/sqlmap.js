@@ -1,7 +1,7 @@
 // NOTE: 都合上省きたいものもあるだろう！
 const ignoreFuncNames = [
   "main",
-  "getInitialize", "wsGameHandler", "NewHandler", "InitBenchmark",
+  // "GetInitialize", "wsGameHandler", "NewHandler", "InitBenchmark",
 ]
 // NOTE: 都合上無視したいテーブルもあるだろう！
 const ignoreTableNames = ["SHA2", "floor"]
