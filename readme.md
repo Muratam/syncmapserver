@@ -41,7 +41,7 @@ IncrBy(key string, value int) int
 DBSize() int       // means key count
 AllKeys() []string // get all keys
 FlushAll()
-// Transaction
+// Transaction (キーをロックしているのでこの中の tx を使って値を読み書きしてね)
 Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool)
 TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool)
 // List 関連 (こういうのはRedisの高機能のデータ構造のほうが使いそう)
