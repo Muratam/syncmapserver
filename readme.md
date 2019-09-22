@@ -59,8 +59,8 @@ Initialize()
 以下はSyncMapServerのみ
 
 ```go
-IsLocked(key string) // Redis には存在しないがSyncMapServerには存在する
-Insert(value interface{}) // DBSize()+1に(そのキーをロックして)挿入
+IsLocked(key string) // Redisには存在しないがSyncMapServerには(悲観ロックなので)存在する
+Insert(value interface{}) // str(DBSize()+1)のキーに(そのキーをロックして)挿入
 ```
 
 # 使い方
