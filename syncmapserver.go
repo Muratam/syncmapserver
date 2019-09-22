@@ -1131,7 +1131,7 @@ func (this *SyncMapServer) readFile(path string) error {
 		} else if strings.Compare(t, "2") == 0 {
 			conn.storeDirect(key, here[2:])
 		} else {
-			panic(nil)
+			log.Panic("READING ERROR")
 		}
 	}
 	return nil
@@ -1144,27 +1144,23 @@ func (this *SyncMapServer) startBackUpProcess() {
 }
 
 // 初期化データがあればそれをロード。なければ初期化の方法を書く
+// 初期化中にWriteBackUpが起動したら遅くなるかもしれないけど仕方ないね
 func (this *SyncMapServerConn) Initialize() {
-	log.Println("INIT 1:", this.DBSize())
 	if this.IsMasterServer() {
 		path := InitMarkPath + strconv.Itoa(this.server.masterPort) + ".sm"
-		log.Println("INIT 2:", this.DBSize())
 		err := this.server.readFile(path)
-		log.Println("INIT 3:", this.DBSize())
 		if err == nil { // 読み込めたので何もしない
+			log.Println("INIT FROM LOCAL_INITIAL_DATA")
 			return
 		}
-		log.Println("INIT 4:", this.DBSize())
+		log.Println("START INIT FROM LOCAL_DATA")
 		this.FlushAll()
-		log.Println("INIT 5:", this.DBSize())
 		this.server.InitializeFunction()
-		log.Println("INIT 6:", this.DBSize())
 		this.server.writeFile(path)
-		log.Println("INIT 7:", this.DBSize())
+		log.Println("STORED INITIAL DATA")
 	} else {
 		this.send(syncMapCommandInitialize)
 	}
-	log.Println("INITIALIZZED:", this.DBSize())
 }
 
 // 自身の SyncMapからLoad / 変更できるようにpointer型で受け取ること
