@@ -1159,12 +1159,14 @@ func (this *SyncMapServer) writeFile(path string) {
 		result = append(result, here)
 		return true
 	})
-	file, err := os.Create(path)
-	if err != nil {
-		panic(err)
-	}
-	defer file.Close()
-	file.Write(encodeToBytes(result))
+	func() { // NOTE: 初期化の時間が気になるようならここを goroutine にしてもよい
+		file, err := os.Create(path)
+		if err != nil {
+			log.Panic(err)
+		}
+		file.Write(encodeToBytes(result))
+		file.Close()
+	}()
 }
 func (this *SyncMapServer) readFile(path string) error {
 	if !this.IsMasterServer() {
@@ -1320,7 +1322,7 @@ func (this *SyncMapServerConn) sendBySlave(command string, packet []byte, rawPac
 			this.server.connectionPoolStatus[poolIndex] = ConnectionPoolStatusDisconnected
 			return this.sendBySlave(command, packet)
 		}
-		// NOTE: できるなら永遠に接続したい
+		// できるなら永遠に接続したい
 		newConn.SetKeepAlive(true)
 		// newConn.SetReadBuffer(65536)
 		// newConn.SetWriteBuffer(65536)

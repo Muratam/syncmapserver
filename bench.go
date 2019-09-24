@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -93,6 +95,58 @@ func TestMasterSlaveInterpret() {
 		}
 	}()
 	fmt.Println("-------  Master Slave Test Passed  -------")
+}
+func smrTest() { // 実際の環境に沿ったテスト(1.5倍ほど速いはず)
+	rand.Seed(time.Now().UnixNano())
+	fmt.Println("-- SyncMap[Master + Slave + Slave] vs Redis ---")
+	times := 40000
+	maxConn := 100
+	func() { // NOTE: Redis の方を先にやらないとよくない
+		redisWrap.FlushAll()
+		wg := sync.WaitGroup{}
+		start := time.Now()
+		for i := 0; i < maxConn; i++ {
+			n := times / maxConn
+			wg.Add(n)
+			go func() {
+				for k := 0; k < n; k++ {
+					m := strconv.Itoa(int(k))
+					redisWrap.Set(m, "eo")
+					x := ""
+					redisWrap.Get(m, x)
+					wg.Done()
+				}
+			}()
+		}
+		wg.Wait()
+		duration := time.Now().Sub(start)
+		fmt.Println("[Redis]:", duration)
+	}()
+	func() {
+		smMaster.FlushAll()
+		smSlave2 := NewSyncMapServerConn("127.0.0.1:8080", false)
+		sms := []*SyncMapServerConn{smMaster, smSlave, smSlave2}
+		wg := sync.WaitGroup{}
+		start := time.Now()
+		for i := 0; i < maxConn; i++ {
+			j := i
+			n := times / maxConn
+			wg.Add(n)
+			go func() {
+				sm := sms[j%3]
+				for k := 0; k < n; k++ {
+					m := strconv.Itoa(int(k))
+					sm.Set(m, "eo")
+					x := ""
+					sm.Get(m, x)
+					wg.Done()
+				}
+			}()
+		}
+		wg.Wait()
+		duration := time.Now().Sub(start)
+		fmt.Println("[Master+Slave+Slave]:", duration)
+	}()
 }
 
 /////////////////////////////////////////////
@@ -429,6 +483,7 @@ func main() {
 	Test3(TestMGetMSetInt, 1)
 	Test3(TestParallelTransactionIncr, 1)
 	fmt.Println("-----------BENCH----------")
+	// smrTest()
 	Test3(BenchMGetMSetStr4000, 1)
 	Test3(BenchMGetMSetUser4000, 1)
 	Test3(BenchGetSetUser, 4000)
