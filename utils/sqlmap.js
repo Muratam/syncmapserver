@@ -1,7 +1,7 @@
 // NOTE: 都合上省きたいものもあるだろう！
 const ignoreFuncNames = [
   "main",
-  "Render", "GetInitialize", "wsGameHandler", "NewHandler", "InitBenchmark",
+  // "Render", "GetInitialize", "wsGameHandler", "NewHandler", "InitBenchmark",
 ]
 // NOTE: 都合上無視したいテーブルもあるだろう！
 const ignoreTableNames = ["SHA2", "floor"]
@@ -9,6 +9,8 @@ const ignoreTableNames = ["SHA2", "floor"]
 const ignoreFunctionRelativity = false;
 // NOTE: 見にくいレイアウトはいやだろう！ dot, fdp, twopi
 const layoutType = "dot";
+// NOTE: 怪しいログを出しておきたいこともあるだろう！
+const verpose = false;
 
 // JOIN / func()A(){} | func A(){}
 // func A(){}  / func (){} /
@@ -47,7 +49,7 @@ function parseGoSQLRelation(content) {
       if (commands.length > 1) return [commands[1], queryType]
     }
     if (queryType === "SELECT") {
-      console.log(`WARNING (${functionName}) ${queryType} :: ${query}`)
+      if (verpose) console.log(`WARNING (${functionName}) ${queryType} :: ${query}`)
       if (commands.length > 1 && commands[1].match(/[_a-zA-Z0-9]+\(/))
         return [commands[1].replace(/\(.+/, ""), queryType]
     }
@@ -64,8 +66,10 @@ function parseGoSQLRelation(content) {
   for (let found of content.matchAll(/func(?:\s*?\(.+?\)\s*?|\s+?)(.+?)\(.*?\)/g)) {
     let funcName = found[1].trim()
     if (!funcName.match(/^[_0-9a-zA-Z]+$/)) {
-      console.log(funcName)
-      console.log(found[0])
+      if (verpose) {
+        console.log(funcName)
+        console.log(found[0])
+      }
       continue;
     }
     let index = found.index
@@ -95,10 +99,10 @@ function parseGoSQLRelation(content) {
       let stored = { query: innerQuery, table: table, type: queryType }
       if (table) {
         functionNameToSQL[functionName] = (functionNameToSQL[functionName] || []).concat(stored)
-        console.log("STORED AT" + functionName)
+        if (verpose) console.log("STORED AT" + functionName)
       }
-      console.log(`COMPLEX INNER QUERY at ${functionName}`)
-      console.log(stored)
+      if (verpose) console.log(`COMPLEX INNER QUERY at ${functionName}`)
+      if (verpose) console.log(stored)
     }
 
     if (query.match(/JOIN/ig)) { // JOIN チェック
@@ -113,8 +117,8 @@ function parseGoSQLRelation(content) {
           { query: query, table: table, type: queryType })
         joinedTables.push(table)
       }
-      console.log("JOIN : " + query)
-      console.log(joinedTables)
+      if (verpose) console.log("JOIN : " + query)
+      if (verpose) console.log(joinedTables)
     }
     let [table, queryType] = getTableName(query, functionName)
     functionNameToSQL[functionName] = (functionNameToSQL[functionName] || []).concat(
@@ -204,6 +208,7 @@ function writeDot(parsed) {
   }
   let unusedSet = getUnusedFunctionSet()
   let tableRel = ""
+  let tables = {}
   for (let src in functionNameToSQL) {
     if (ignoreFuncNames.includes(src)) continue;
     let already = {}
@@ -225,9 +230,14 @@ function writeDot(parsed) {
       if (tableName === "parse_error") tableName = `???`;
       tableName = tableName.replace(/([a-z])_/g, "$1\n_")
       tableRel += `${dst.table}[label="${tableName}",shape=box, style="filled, bold, rounded", fillcolor="#ffffcc"];\n`
+      tables[dst.table] = tables[dst.table] || {};
+      tables[dst.table][src] = tables[dst.table][src] || [];
+      tables[dst.table][src].push(dst.query)
     }
     tableRel += `${src}[label="${src.replace(/([a-z])([A-Z])/g, "$1\n$2")}"];\n`
   }
+  // sort and write
+  console.log(tables)
 
   let funcRel = ""
   if (!ignoreFunctionRelativity) {
