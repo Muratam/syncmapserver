@@ -1,7 +1,7 @@
 // NOTE: 都合上省きたいものもあるだろう！
 const ignoreFuncNames = [
   "main",
-  // "GetInitialize", "wsGameHandler", "NewHandler", "InitBenchmark",
+  "Render", "GetInitialize", "wsGameHandler", "NewHandler", "InitBenchmark",
 ]
 // NOTE: 都合上無視したいテーブルもあるだろう！
 const ignoreTableNames = ["SHA2", "floor"]
@@ -9,6 +9,12 @@ const ignoreTableNames = ["SHA2", "floor"]
 const ignoreFunctionRelativity = false;
 // NOTE: 見にくいレイアウトはいやだろう！ dot, fdp, twopi
 const layoutType = "dot";
+
+// JOIN / func()A(){} | func A(){}
+// func A(){}  / func (){} /
+// func (this *SyncMapServerConn) insertImpl(value []byte) int {}
+// func                           insertImpl(value []byte) int {}
+// func (this *SyncMapServerConn)                          int {}
 
 const fs = require("fs")
 function parseGoSQLRelation(content) {
@@ -18,10 +24,6 @@ function parseGoSQLRelation(content) {
   content = content.replace(/\s+/g, " ")
   content = content.replace(/"\s*\+\s*"/g, "") // 文字列結合
   content = content.replace(/`\s*\+\s*`/g, "") // 文字列結合
-
-  function escape(s) {
-    return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')
-  }
   function getTableName(query, functionName) {
     query = query.trim().replace(/[\t\n]/g, " ")
     let commands = query.split(" ")
@@ -58,8 +60,14 @@ function parseGoSQLRelation(content) {
   let preI = 0
   let preName = "unknown_function"
   let havingFunctionsMap = {}
-  for (let found of content.matchAll(/func\s+?(\S+?)\(.*?\)/g)) {
-    let funcName = found[1]
+  // NOTE:interface{} を引数に取るものが無理かも
+  for (let found of content.matchAll(/func(?:\s*?\(.+?\)\s*?|\s+?)(.+?)\(.*?\)/g)) {
+    let funcName = found[1].trim()
+    if (!funcName.match(/^[_0-9a-zA-Z]+$/)) {
+      console.log(funcName)
+      console.log(found[0])
+      continue;
+    }
     let index = found.index
     for (let i = preI; i < index; i++) {
       textIndexToFuncName[i] = preName
@@ -81,7 +89,7 @@ function parseGoSQLRelation(content) {
     let query = matched[0]
     query = query.substring(1, query.length - 1)
     if (query.substring(1, query.length).match(/SELECT/ig)) {
-      // NOTE: カッコは一つだけとして雑に
+      // NOTE: カッコは一つだけとして雑に複数のSELECTをチェック
       let innerQuery = query.substring(1, query.length).match(/SELECT\s.+/ig)[0]
       let [table, queryType] = getTableName(innerQuery, functionName)
       let stored = { query: innerQuery, table: table, type: queryType }
@@ -91,6 +99,22 @@ function parseGoSQLRelation(content) {
       }
       console.log(`COMPLEX INNER QUERY at ${functionName}`)
       console.log(stored)
+    }
+
+    if (query.match(/JOIN/ig)) { // JOIN チェック
+      let commands = query.split(" ")
+      let joinedTables = []
+      for (let i = 0; i < commands.length - 1; i++) {
+        let command = commands[i]
+        if (!command.match(/^JOIN$/ig)) continue;
+        let table = commands[i + 1];
+        let queryType = "SELECT";
+        functionNameToSQL[functionName] = (functionNameToSQL[functionName] || []).concat(
+          { query: query, table: table, type: queryType })
+        joinedTables.push(table)
+      }
+      console.log("JOIN : " + query)
+      console.log(joinedTables)
     }
     let [table, queryType] = getTableName(query, functionName)
     functionNameToSQL[functionName] = (functionNameToSQL[functionName] || []).concat(
