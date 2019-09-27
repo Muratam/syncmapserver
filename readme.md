@@ -5,6 +5,9 @@
   - Slave側はRedisと同程度の速度。
 - 実装されているメソッドの殆どはRedisと互換性があるため、切り替えが容易。Redisラッパーも同梱。
 
+- `node sqlmap.js ../*.go > sqlmap.json && dot sqlmap.dot -Tpng > sqlmap.png`
+  - Insert() 時に、IDは未定なことに注意
+
 # 使い分け
 - Redisの楽観ロックに対して、こちらは悲観的ロック。
   - MySQLと同じロック方式なのでコードを置き換えやすい。
