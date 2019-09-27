@@ -218,6 +218,12 @@ function writeDot(parsed) {
       let label = `[style="bold"]`
       let tableName = dst.table;
       if (ignoreTableNames.includes(tableName)) continue;
+      if ((dst.query.match(/\(/g) || []).length === (dst.query.match(/\)/g) || []).length) {
+        // 複合クエリの内側のものは除外
+        tables[dst.table] = tables[dst.table] || {};
+        tables[dst.table][src] = tables[dst.table][src] || [];
+        tables[dst.table][src].push(dst.query)
+      }
       if ((already[dst.type] || {})[tableName]) continue;
       already[dst.type] = already[dst.type] || {}
       already[dst.type][tableName] = true;
@@ -230,12 +236,6 @@ function writeDot(parsed) {
       if (tableName === "parse_error") tableName = `???`;
       tableName = tableName.replace(/([a-z])_/g, "$1\n_")
       tableRel += `${dst.table}[label="${tableName}",shape=box, style="filled, bold, rounded", fillcolor="#ffffcc"];\n`
-      if ((dst.query.match(/\(/g) || []).length === (dst.query.match(/\)/g) || []).length) {
-        // 複合クエリの内側のものは除外
-        tables[dst.table] = tables[dst.table] || {};
-        tables[dst.table][src] = tables[dst.table][src] || [];
-        tables[dst.table][src].push(dst.query)
-      }
     }
     tableRel += `${src}[label="${src.replace(/([a-z])([A-Z])/g, "$1\n$2")}"];\n`
   }
