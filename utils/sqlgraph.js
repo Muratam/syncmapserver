@@ -1,6 +1,6 @@
 // NOTE: 都合上省きたいものもあるだろう！
 const ignoreFuncNames = [
-  "main",
+  "main"
 ]
 // NOTE: 都合上無視したいテーブルもあるだろう！
 const ignoreTableNames = ["SHA2", "floor"]
@@ -10,63 +10,57 @@ const ignoreFunctionRelativity = false;
 const layoutType = "dot";
 
 // TODO: join や 複合クエリ
-function parseGoSQLRelation(content) {
-  // 見つかった関数
-  let queries = {}
-  for (let matched of content.matchAll(/(?:"\s*(?:SELECT|DELETE|INSERT|UPDATE)\s.+?"|`\s*(?:SELECT|DELETE|INSERT|UPDATE)\s.+?`)/ig)) {
-    let index = matched.index
-    let functionName = textIndexToFuncName[index]
-    let query = matched[0]
-    query = query.substring(1, query.length - 1)
-    if (query.substring(1, query.length).match(/SELECT/ig)) {
-      // NOTE: カッコは一つだけとして雑に複数のSELECTをチェック
-      let innerQuery = query.substring(1, query.length).match(/SELECT\s.+/ig)[0]
-      let [table, queryType] = getTableName(innerQuery, functionName)
-      let stored = { query: innerQuery, table: table, type: queryType }
-      if (table) {
-        queries[functionName] = (queries[functionName] || []).concat(stored)
-        if (verpose) console.log("STORED AT" + functionName)
-      }
-      if (verpose) console.log(`COMPLEX INNER QUERY at ${functionName}`)
-      if (verpose) console.log(stored)
-    }
-    if (query.match(/JOIN/ig)) { // JOIN チェック
-      let commands = query.split(" ")
-      let joinedTables = []
-      for (let i = 0; i < commands.length - 1; i++) {
-        let command = commands[i]
-        if (!command.match(/^JOIN$/ig)) continue;
-        let table = commands[i + 1];
-        let queryType = "SELECT";
-        queries[functionName] = (queries[functionName] || []).concat(
-          { query: query, table: table, type: queryType })
-        joinedTables.push(table)
-      }
-      if (verpose) console.log("JOIN : " + query)
-      if (verpose) console.log(joinedTables)
-    }
-    let [table, queryType] = getTableName(query, functionName)
-    queries[functionName] = (queries[functionName] || []).concat(
-      { query: query, table: table, type: queryType })
+function parseComplexSQL(query, functionName) {
+  let result = []
+  // NOTE: カッコは一つだけとして雑に複数のSELECTをチェック
+  if (query.substring(1, query.length).match(/SELECT/ig)) {
+    let innerQuery = query.substring(1, query.length).match(/SELECT\s.+/ig)[0]
+    let [table, queryType] = getTableName(innerQuery, functionName)
+    result.push({ query: innerQuery, table: table, type: queryType })
+    console.warn(`COMPLEX INNER QUERY at ${functionName}`)
+    console.warn(stored)
   }
+  // JOIN チェック
+  if (query.match(/JOIN/ig)) {
+    let commands = query.split(" ")
+    let joinedTables = []
+    for (let i = 0; i < commands.length - 1; i++) {
+      let command = commands[i]
+      if (!command.match(/^JOIN$/ig)) continue;
+      let table = commands[i + 1];
+      result.push({ query: query, table: table, type: "SELECT" })
+    }
+    console.warn("JOIN : " + query)
+    console.warn(joinedTables)
+  }
+  { // 普通に
+    let [table, queryType] = getTableName(query, functionName)
+    result.push({ query: query, table: table, type: queryType })
+  }
+  return result;
 }
 
 function writeDot(queries, calls) {
   function getUnusedFunctionSet() {
     // 雑にやってもいけるやろ
     let unusedSet = {}
-    for (let unused of ignoreFuncNames) {
-      unusedSet[unused] = true;
-    }
+    for (let unused of ignoreFuncNames) unusedSet[unused] = true;
     let dirty = true;
+    let funcList = [];
+    for (let src in calls) {
+      for (let dst of calls[src]) funcList.push(dst);
+      funcList.push(src);
+    }
+    funcList = Array.from(new Set(funcList))
     while (dirty) {
       dirty = false;
-      for (let src in calls) {
+      for (let src of funcList) {
         if (unusedSet[src]) continue
         let funcs = calls[src] || []
         let sqls = queries[src] || []
         // sql は絶対に必要
         if (sqls.length > 0) continue;
+        // 自身が誰も参照していなければ不要
         if (funcs.length === 0) {
           dirty = unusedSet[src] = true;
           continue;
@@ -81,9 +75,24 @@ function writeDot(queries, calls) {
           dirty = unusedSet[src] = true;
           continue;
         }
+        // 自身が誰からも参照されていなければ不要
+        if (
+          (() => {
+            // for (let src2 in calls) {
+            //   if (unusedSet[src2]) continue;
+            //   for (let dst2 of calls[src2]) {
+            //     if (dst2 === src) return false;
+            //   }
+            // }
+            return true;
+          })()
+        ) {
+          dirty = unusedSet[src] = true;
+          continue;
+        }
       }
     }
-    for (let src in calls) {
+    for (let src of funcList) {
       if (unusedSet[src]) continue;
       // たどり着ける先全てにSQLが無ければunused
       let sqlExists = false;
@@ -185,8 +194,8 @@ function writeDot(queries, calls) {
         fontname = "Helvetica",
         style = "dashed",
     ];
-      ${ funcRel}
-      ${ tableRel}
+      ${funcRel}
+      ${tableRel}
     }`
 }
 // [tableName,queryType] を返す
@@ -224,20 +233,16 @@ let parsed = JSON.parse("" + require("fs").readFileSync(0))
 // 整形
 let queries = {};
 let calls = {};
-for (let query of parsed.queries.main) { // [{query/caller}]
-  let [tableName, queryType] = getTableName(query.query, query.caller);
-  queries[query.caller] = (queries[query.caller] || []).concat({
-    table: tableName,
-    type: queryType,
-    query: query.query,
-  })
+for (let queryStruct of parsed.queries.main) { // [{query/caller}]
+  let { query, caller } = queryStruct;
+  queries[caller] = (queries[caller] || []).concat(parseComplexSQL(query, caller))
 }
 for (let call of parsed.calls.main) { // [caller/callee]
-  if (call.caller.match(/\./)) continue;
-  if (call.callee.match(/\./)) continue;
-  calls[call.caller] = (calls[call.caller] || []).concat(call.callee)
+  let { caller, callee } = call;
+  if (caller === callee) continue; // 自己ループ
+  calls[caller] = (calls[caller] || []).concat(callee)
 }
-for (let i = 0; i < calls.length; i++)calls[i] = Array.from(new Set(calls[i]));
+for (let k in calls) calls[k] = Array.from(new Set(calls[k]));
 
 let dotted = writeDot(queries, calls);
 require("fs").writeFileSync("sqlmap.dot", dotted)
