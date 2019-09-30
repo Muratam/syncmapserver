@@ -244,4 +244,5 @@ for (let call of parsed.calls.main) { // [caller/callee]
 for (let k in calls) calls[k] = Array.from(new Set(calls[k]));
 
 let dotted = writeDot(queries, calls);
-require("fs").writeFileSync("sqlmap.dot", dotted)
+require("fs").writeFileSync("./sqlgraph.dot", dotted)
+require('child_process').execSync("dot sqlgraph.dot -Tpng > sqlgraph.png")
