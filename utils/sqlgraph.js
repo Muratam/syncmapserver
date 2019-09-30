@@ -18,7 +18,6 @@ function parseComplexSQL(query, functionName) {
     let [table, queryType] = getTableName(innerQuery, functionName)
     result.push({ query: innerQuery, table: table, type: queryType })
     console.warn(`COMPLEX INNER QUERY at ${functionName}`)
-    console.warn(stored)
   }
   // JOIN チェック
   if (query.match(/JOIN/ig)) {
@@ -76,20 +75,20 @@ function writeDot(queries, calls) {
           continue;
         }
         // 自身が誰からも参照されていなければ不要
-        if (
-          (() => {
-            // for (let src2 in calls) {
-            //   if (unusedSet[src2]) continue;
-            //   for (let dst2 of calls[src2]) {
-            //     if (dst2 === src) return false;
-            //   }
-            // }
-            return true;
-          })()
-        ) {
-          dirty = unusedSet[src] = true;
-          continue;
-        }
+        // if (
+        //   (() => {
+        //     for (let src2 in calls) {
+        //       if (unusedSet[src2]) continue;
+        //       for (let dst2 of calls[src2]) {
+        //         if (dst2 === src) return false;
+        //       }
+        //     }
+        //     return true;
+        //   })()
+        // ) {
+        //   dirty = unusedSet[src] = true;
+        //   continue;
+        // }
       }
     }
     for (let src of funcList) {
@@ -222,7 +221,7 @@ function getTableName(query, functionName) {
     if (commands.length > 1) return [commands[1], queryType]
   }
   if (queryType === "SELECT") {
-    if (verpose) console.log(`WARNING (${functionName}) ${queryType} :: ${query}`)
+    console.warn(`WARNING (${functionName}) ${queryType} :: ${query}`)
     if (commands.length > 1 && commands[1].match(/[_a-zA-Z0-9]+\(/))
       return [commands[1].replace(/\(.+/, ""), queryType]
   }
