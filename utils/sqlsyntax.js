@@ -12,6 +12,8 @@ for (let queryStruct of parsed.queries.main) {
     execSync(`mysql -u${username} -p${password} ${dbname} -e'explain ${query}' 2>&1`)
   }
   catch (error) {
-    console.error(`ERROR> ${query}\n--------------------------`)
+    console.error(error.stdout.toString())
+    console.error(`query> ${query}`)
+    console.error("-----------------------------")
   }
 }
