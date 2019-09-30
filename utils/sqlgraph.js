@@ -1,6 +1,6 @@
 // NOTE: 都合上省きたいものもあるだろう！
-const ignoreFuncNames = [
-  "main"
+const ignoreFuncPrefixes = [
+  "main", "(*SyncMapServerConn)."
 ]
 // NOTE: 都合上無視したいテーブルもあるだろう！
 const ignoreTableNames = ["SHA2", "floor"]
@@ -9,7 +9,6 @@ const ignoreFunctionRelativity = false;
 // NOTE: 見にくいレイアウトはいやだろう！ dot, fdp, twopi
 const layoutType = "dot";
 
-// TODO: join や 複合クエリ
 function parseComplexSQL(query, functionName) {
   let result = []
   // NOTE: カッコは一つだけとして雑に複数のSELECTをチェック
@@ -43,7 +42,7 @@ function writeDot(queries, calls) {
   function getUnusedFunctionSet() {
     // 雑にやってもいけるやろ
     let unusedSet = {}
-    for (let unused of ignoreFuncNames) unusedSet[unused] = true;
+    for (let unused of ignoreFuncPrefixes) unusedSet[unused] = true;
     let dirty = true;
     let funcList = [];
     for (let src in calls) {
@@ -54,11 +53,17 @@ function writeDot(queries, calls) {
     while (dirty) {
       dirty = false;
       for (let src of funcList) {
-        if (unusedSet[src]) continue
+        if (unusedSet[src]) continue;
         let funcs = calls[src] || []
         let sqls = queries[src] || []
         // sql は絶対に必要
         if (sqls.length > 0) continue;
+        // ignore のものから始まってほしくない
+        for (let prefix of ignoreFuncPrefixes) {
+          if (!src.startsWith(prefix)) continue;
+          dirty = unusedSet[src] = true;
+        }
+        if (dirty) continue;
         // 自身が誰も参照していなければ不要
         if (funcs.length === 0) {
           dirty = unusedSet[src] = true;
@@ -75,20 +80,20 @@ function writeDot(queries, calls) {
           continue;
         }
         // 自身が誰からも参照されていなければ不要
-        // if (
-        //   (() => {
-        //     for (let src2 in calls) {
-        //       if (unusedSet[src2]) continue;
-        //       for (let dst2 of calls[src2]) {
-        //         if (dst2 === src) return false;
+        //   if (
+        //     (() => {
+        //       for (let src2 in calls) {
+        //         if (unusedSet[src2]) continue;
+        //         for (let dst2 of calls[src2]) {
+        //           if (dst2 === src) return false;
+        //         }
         //       }
-        //     }
-        //     return true;
-        //   })()
-        // ) {
-        //   dirty = unusedSet[src] = true;
-        //   continue;
-        // }
+        //       return true;
+        //     })()
+        //   ) {
+        //     dirty = unusedSet[src] = true;
+        //     continue;
+        //   }
       }
     }
     for (let src of funcList) {
@@ -126,7 +131,7 @@ function writeDot(queries, calls) {
   }
 
   for (let src in queries) {
-    if (ignoreFuncNames.includes(src)) continue;
+    // if (ignoreFuncPrefixes.includes(src)) continue;
     let already = {}
     let srcS = sanitize(src);
     for (let dst of queries[src]) {
@@ -228,21 +233,35 @@ function getTableName(query, functionName) {
   console.error(`ERROR (${functionName}) ${queryType} :: ${query}`)
   return ["parse_error", queryType]
 }
-let parsed = JSON.parse("" + require("fs").readFileSync(0))
-// 整形
-let queries = {};
-let calls = {};
-for (let queryStruct of parsed.queries.main) { // [{query/caller}]
-  let { query, caller } = queryStruct;
-  queries[caller] = (queries[caller] || []).concat(parseComplexSQL(query, caller))
+function parseJsonInput() {
+  let parsed = JSON.parse("" + require("fs").readFileSync(0))
+  // 整形
+  let queries = {};
+  let calls = {};
+  for (let queryStruct of parsed.queries.main) { // [{query/caller}]
+    let { query, caller } = queryStruct;
+    queries[caller] = (queries[caller] || []).concat(parseComplexSQL(query, caller))
+  }
+  for (let call of parsed.calls.main) { // [caller/callee]
+    let { caller, callee } = call;
+    if (caller === callee) continue; // 自己ループ
+    calls[caller] = (calls[caller] || []).concat(callee)
+  }
+  // deduplicate
+  for (let k in calls) calls[k] = Array.from(new Set(calls[k]));
+  // sort key and values
+  let callsKeys = [];
+  for (let k in calls) callsKeys.push(k);
+  let resCalls = {};
+  for (let k of callsKeys.sort()) resCalls[k] = calls[k].sort();
+  let queriesKeys = [];
+  for (let k in queries) queriesKeys.push(k);
+  let resQueries = {};
+  for (let k of queriesKeys.sort()) resQueries[k] = queries[k].sort();
+  return [resCalls, resQueries]
 }
-for (let call of parsed.calls.main) { // [caller/callee]
-  let { caller, callee } = call;
-  if (caller === callee) continue; // 自己ループ
-  calls[caller] = (calls[caller] || []).concat(callee)
-}
-for (let k in calls) calls[k] = Array.from(new Set(calls[k]));
 
+let [calls, queries] = parseJsonInput();
 let dotted = writeDot(queries, calls);
 require("fs").writeFileSync("./sqlgraph.dot", dotted)
 require('child_process').execSync("dot sqlgraph.dot -Tpng > sqlgraph.png")
