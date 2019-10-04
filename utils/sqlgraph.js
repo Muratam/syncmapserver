@@ -150,9 +150,9 @@ function writeDot(queries, calls) {
       already[dst.type] = already[dst.type] || {}
       already[dst.type][tableName] = true;
       if (dst.type === "SELECT") {
-        tableRel += `${tableName} -> ${srcS}${label};\n`
+        tableRel += `${tableName} -> ${srcS}${label}[dir="none"];\n`
       } else { // INSERT / DELETE / UPDATE
-        label = `[style="bold",label="${dst.type}",color="#f08060",fontcolor="#f08060"]`
+        label = `[style="bold",dir="none",label="${dst.type}",color="#f08060",fontcolor="#f08060"]`
         tableRel += `${srcS} -> ${tableName}${label};\n`
       }
       if (tableName === "parse_error") tableName = `???`;
@@ -171,7 +171,7 @@ function writeDot(queries, calls) {
         if (unusedSet[src] || unusedSet[dst]) continue;
         let dstS = sanitize(dst);
         let srcS = sanitize(src);
-        funcRel += `${dstS} -> ${srcS}; \n`
+        funcRel += `${srcS} -> ${dstS}; \n`
         funcRel += `${srcS}[label="${src.replace(/([a-z])([A-Z])/g, "$1\n$2")}"];\n`
         funcRel += `${dstS}[label="${dst.replace(/([a-z])([A-Z])/g, "$1\n$2")}"];\n`
       }
