@@ -1,4 +1,4 @@
-package main
+package syncmapserver
 
 // もしものときに Redis を使いたくなった場合にでも速やかに移行できる Redisラッパー
 // どうせシリアライズする必要があるので、 int 値以外は全て[]byteにしている。

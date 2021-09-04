@@ -1,4 +1,4 @@
-package main
+package syncmapserver
 
 import (
 	"fmt"
@@ -20,15 +20,15 @@ import (
 // 同時にリクエストされるGoroutine の数がこれに比べて多いと性能が落ちる。
 // かといってものすごい多いと peer する. 16 ~ 100 くらいが安定か？アクセス過多な場合は仕方ない。
 const maxSyncMapServerConnectionNum = 50
-const defaultReadBufferSize = 8192                 // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
-const RedisHostPrivateIPAddress = "172.24.122.185" // ここで指定したサーバーに(Redis /SyncMapServerを) 建てる
+const defaultReadBufferSize = 8192 // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
 // `NewSyncMapServerConn(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
-const SyncMapBackUpPath = "./syncmapbackup-" // カレントディレクトリにバックアップを作成。パーミッションに注意。
-const InitMarkPath = "./init-"               // 初期化データ
+var RedisHostPrivateIPAddress = "172.24.122.185" // ここで指定したサーバーに(Redis /SyncMapServerを) 建てる
+var DefaultBackUpTimeSecond = 120
+var SyncMapBackUpPath = "./syncmapbackup-" // カレントディレクトリにバックアップを作成。パーミッションに注意。
+var InitMarkPath = "./init-"               // 初期化データ
 // 起動後この秒数毎にバックアップファイルを作成する(デフォルトでBackUpが作成される設定)
 // /initialize の 120秒後にBackUpとかが多分いい感じかも。
 // Redis は save 900 1 \n save 300 10 \n save 60 10000 とかを手動で設定ファイルに書くとよさそう
-const DefaultBackUpTimeSecond = 120
 
 // 一人がロック中に他のロックしていない人が値を書き換えることができるが問題はないはず
 //  ↑ 整合性が必要なデータかつ不必要なデータということになるので、そんなことは起こらないはず
