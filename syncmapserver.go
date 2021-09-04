@@ -19,10 +19,10 @@ import (
 
 // 同時にリクエストされるGoroutine の数がこれに比べて多いと性能が落ちる。
 // かといってものすごい多いと peer する. 16 ~ 100 くらいが安定か？アクセス過多な場合は仕方ない。
-const maxSyncMapServerConnectionNum = 50
-const defaultReadBufferSize = 8192 // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
+var MaxSyncMapServerConnectionNum = 50
+var DefaultReadBufferSize = 8192 // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
 // `NewSyncMapServerConn(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
-var RedisHostPrivateIPAddress = "172.24.122.185" // ここで指定したサーバーに(Redis /SyncMapServerを) 建てる
+var RedisHostPrivateIPAddress = GetCurrentServerAddress() // ここで指定したアドレスに(Redis /SyncMapServerを) 建てる
 var DefaultBackUpTimeSecond = 120
 var SyncMapBackUpPath = "./syncmapbackup-" // カレントディレクトリにバックアップを作成。パーミッションに注意。
 var InitMarkPath = "./init-"               // 初期化データ
@@ -33,14 +33,17 @@ var InitMarkPath = "./init-"               // 初期化データ
 // 一人がロック中に他のロックしていない人が値を書き換えることができるが問題はないはず
 //  ↑ 整合性が必要なデータかつ不必要なデータということになるので、そんなことは起こらないはず
 
-func MyServerIsOnMasterServerIP() bool {
+func GetCurrentServerAddress() string {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer conn.Close()
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return strings.Compare(localAddr.IP.String(), RedisHostPrivateIPAddress) == 0
+	return conn.LocalAddr().(*net.UDPAddr).IP.String()
+}
+
+func MyServerIsOnMasterServerIP() bool {
+	return strings.Compare(GetCurrentServerAddress(), RedisHostPrivateIPAddress) == 0
 }
 func GetMasterServerAddress() string {
 	if MyServerIsOnMasterServerIP() {
@@ -182,7 +185,7 @@ func min(a, b int) int {
 func readAll(conn net.Conn) []byte {
 	contentLen := 0
 	var bufAll []byte
-	readMax := defaultReadBufferSize
+	readMax := DefaultReadBufferSize
 	currentReadLen := 0
 	// 検証結果より
 	// 2回 Read を呼び出しているが、適切なサイズの buffer を確保できて効率が良いため、
@@ -1058,6 +1061,12 @@ func NewSyncMapServerConn(substanceAddress string, isMaster bool) *SyncMapServer
 		return result.GetConn()
 	}
 }
+func NewSyncMapServerConnByPort(port int) *SyncMapServerConn {
+	return NewSyncMapServerConn(
+		GetMasterServerAddress()+":"+strconv.Itoa(port),
+		MyServerIsOnMasterServerIP())
+}
+
 func (this *SyncMapServerConn) New() *SyncMapServerConn {
 	return &SyncMapServerConn{
 		server:              this.server,
@@ -1125,10 +1134,10 @@ func newSlaveSyncMapServer(substanceAddress string) *SyncMapServer {
 	}
 	this.masterPort = port
 	this.MySendCustomFunction = DefaultSendCustomFunction
-	this.connectionPool = make([]*net.TCPConn, maxSyncMapServerConnectionNum)
-	this.connectionPoolStatus = make([]int, maxSyncMapServerConnectionNum)
-	this.connectionPoolEmptyChannel = make(chan int, maxSyncMapServerConnectionNum)
-	for i := 0; i < maxSyncMapServerConnectionNum; i++ {
+	this.connectionPool = make([]*net.TCPConn, MaxSyncMapServerConnectionNum)
+	this.connectionPoolStatus = make([]int, MaxSyncMapServerConnectionNum)
+	this.connectionPoolEmptyChannel = make(chan int, MaxSyncMapServerConnectionNum)
+	for i := 0; i < MaxSyncMapServerConnectionNum; i++ {
 		this.connectionPoolEmptyChannel <- i
 	}
 	// 要求があって初めて接続する。再起動試験では起動順序が一律ではないため。
