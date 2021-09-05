@@ -56,16 +56,18 @@ Insert(value interface{}) // str(DBSize()+1)のキーに(そのキーをロッ�
 - User Struct をGet/Setする例
 
 ```go
-// ここで指定した Private IP を持つSyncMapserverがMasterとして、他はSlaveとして起動。
-const RedisHostPrivateIPAddress = "172.24.122.185"
-var isMasterServerIP = MyServerIsOnMasterServerIP()
-var idToUserServer = NewSyncMapServerConn(GetMasterServerAddress()+":8884", isMasterServerIP)
+import "github.com/Muratam/syncmapserver"
+var idToUserServer *syncmapserver.SyncMapServerConn
 
 func main(){
-  u := randUser() // テスト用のランダムに User Struct を作成する関数
-  idToUserServer.Set("hoge", u) // シリアライズは中で勝手にやってくれる
+  // ここで指定した Private IP を持つSyncMapserverがMasterとして、他はSlaveとして起動。
+  // 指定しない場合は localhost で起動する
+  syncmapserver.RedisHostPrivateIPAddress = "192.168.2.1"
+  smIdToUser := syncmapserver.NewSyncMapServerConnByPort(8885)
+  u := User{}
+  smIdToUser.Set("hoge", u) // シリアライズは中で勝手にやってくれる
   var u2 User
-  idToUserServer.Get("hoge", &u2) // 読み込みなので & をつける
+  smIdToUser.Get("hoge", &u2) // 読み込みなので & をつける
   assert(u == u2) // 同一になる(time.Now()は .Truncate(time.Second)すること！)
   ok := conn.Get("piyo", &u) // 存在しないキーなので ok == false になる。
   assert(!ok)
@@ -75,9 +77,9 @@ func main(){
 - User Struct をMGet/MSetする例
 
 ```go
-// ここで指定した Private IP を持つSyncMapserverがMasterとして、他はSlaveとして起動。
 func main(){
-  conn := idToUserServer
+  // ... 作成までの流れは省略
+  conn := smIdToUser
   // MSet は map[string]interface{}{} を作ってそれを渡すことで実行する。
   var keys []string
   localMap := map[string]interface{}{}
@@ -104,6 +106,7 @@ func main(){
 - キーをロックするTransaction
 ```go
 func main(){
+  // ... 作成までの流れは省略
   conn.Set("a", 0)
   for i := 0 ; i < 2500 ; i ++ {
     go func(){
@@ -126,9 +129,10 @@ func main(){
 - 互換性を持ったままRedisにする例
 ```go
 // 0番DBの指定したIPのところのRedisにつなぐ
-var idToUserServer = NewRedisWrapper("127.0.0.1", 0)
+var idToUserServer *syncmapserver.RedisWrapper
 
 func main(){
+  idToUserServer = NewRedisWrapper("127.0.0.1", 0)
   // あとは SyncMapServer のものと全く同じコードでよい。(楽観ロックが異なるTransaction以外は)
   u := randUser()
   idToUserServer.Set("hoge", u)
