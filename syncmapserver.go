@@ -1206,8 +1206,10 @@ func (this *SyncMapServer) readFile(path string) error {
 }
 func (this *SyncMapServer) startBackUpProcess() {
 	go func() {
-		time.Sleep(time.Duration(DefaultBackUpTimeSecond) * time.Second)
-		this.writeFile(this.getDefaultPath())
+		for {
+			time.Sleep(time.Duration(DefaultBackUpTimeSecond) * time.Second)
+			this.writeFile(this.getDefaultPath())
+		}
 	}()
 }
 
@@ -1229,6 +1231,11 @@ func (this *SyncMapServerConn) Initialize() {
 	} else {
 		this.send(syncMapCommandInitialize)
 	}
+}
+
+// 現在の内容を強制的に保存
+func (this *SyncMapServerConn) ForceWriteNow() {
+	this.server.writeFile(this.getDefaultPath())
 }
 
 // 自身の SyncMapからLoad / 変更できるようにpointer型で受け取ること

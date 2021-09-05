@@ -1,4 +1,4 @@
-package syncmapserver
+package main
 
 import (
 	"fmt"
@@ -14,7 +14,7 @@ func backup() {
 		smMaster.Set(key, u)
 		smMaster.RPush("a", u)
 	}
-	smMaster.server.writeFile()
+	smMaster.ForceWriteNow()
 }
 func readCheck() {
 	for i := 0; i < 4000; i++ {

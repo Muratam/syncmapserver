@@ -1,7 +1,8 @@
-package syncmapserver
+package main
 
 import (
 	"fmt"
+	"github.com/Muratam/syncmapserver"
 	"math/rand"
 	"reflect"
 	"runtime"
@@ -11,19 +12,11 @@ import (
 )
 
 // NewSyncMapServer(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) のように ISUCON本本では使う
-var smMaster = NewSyncMapServerConn("127.0.0.1:8080", true)
-var smSlave = NewSyncMapServerConn("127.0.0.1:8080", false)
-var redisWrap = NewRedisWrapper("127.0.0.1", 0)
-
-var stores = []KeyValueStoreConn{smMaster, smSlave, redisWrap}
+var smMaster = syncmapserver.NewSyncMapServerConn("127.0.0.1:8080", true)
+var smSlave = syncmapserver.NewSyncMapServerConn("127.0.0.1:8080", false)
+var redisWrap = syncmapserver.NewRedisWrapper("127.0.0.1", 0)
+var stores = []syncmapserver.KeyValueStoreConn{smMaster, smSlave, redisWrap}
 var names = []string{"smMaster", "smSlave ", "redis   "}
-
-// var stores = []KeyValueStoreConn{smMaster, redisWrap}
-// var names = []string{"smMaster", "redis   "}
-// var stores = []KeyValueStoreConn{smSlave}
-// var names = []string{"smSlave "}
-// var stores = []KeyValueStoreConn{redisWrap}
-// var names = []string{"redis"}
 
 // time.Time は truncateすること。あとpointer型もやめてね
 // 大文字のものしか保存されないよ
@@ -97,9 +90,9 @@ func ExecuteImpl(times int, isParallel bool, maxGoroutineNum int, f func(i int))
 	}
 }
 func Execute(times int, isParallel bool, f func(i int)) {
-	ExecuteImpl(times, isParallel, maxSyncMapServerConnectionNum, f)
+	ExecuteImpl(times, isParallel, syncmapserver.MaxSyncMapServerConnectionNum, f)
 }
-func Test3(f func(conn KeyValueStoreConn), times int) (milliSecs []int64) {
+func Test3(f func(conn syncmapserver.KeyValueStoreConn), times int) (milliSecs []int64) {
 	rand.Seed(time.Now().UnixNano())
 	fmt.Println("------- ", runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name(), " x ", times, " -------")
 	for i, conn := range stores {
@@ -114,7 +107,7 @@ func Test3(f func(conn KeyValueStoreConn), times int) (milliSecs []int64) {
 	}
 	return milliSecs
 }
-func TestAverage3(f func(conn KeyValueStoreConn), times int) {
+func TestAverage3(f func(conn syncmapserver.KeyValueStoreConn), times int) {
 	milliSecs := make([]int64, len(stores))
 	for n := 1; n <= times; n++ {
 		resMilliSecs := Test3(f, 1)

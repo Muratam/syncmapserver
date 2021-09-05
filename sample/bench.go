@@ -1,4 +1,4 @@
-package syncmapserver
+package main
 
 import (
 	"fmt"
