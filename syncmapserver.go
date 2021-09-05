@@ -1235,7 +1235,7 @@ func (this *SyncMapServerConn) Initialize() {
 
 // 現在の内容を強制的に保存
 func (this *SyncMapServerConn) ForceWriteNow() {
-	this.server.writeFile(this.getDefaultPath())
+	this.server.writeFile(this.server.getDefaultPath())
 }
 
 // 自身の SyncMapからLoad / 変更できるようにpointer型で受け取ること

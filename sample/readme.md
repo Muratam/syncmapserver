@@ -1,5 +1,6 @@
 # 動作サンプル
 
+
 ## ベンチマークサンプル
 
 `go run bench.go benchutil.go`
