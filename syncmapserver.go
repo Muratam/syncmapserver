@@ -22,7 +22,7 @@ import (
 var MaxSyncMapServerConnectionNum = 50
 var DefaultReadBufferSize = 8192 // ガッと取ったほうが良い。メモリを使用したくなければ 1024.逆なら65536
 // `NewSyncMapServerConn(GetMasterServerAddress()+":8884", MyServerIsOnMasterServerIP()) `
-var RedisHostPrivateIPAddress = GetCurrentServerAddress() // ここで指定したアドレスに(Redis /SyncMapServerを) 建てる
+var HostPrivateIPAddress = GetCurrentServerAddress() // ここで指定したアドレスに(Redis /SyncMapServerを) 建てる
 var DefaultBackUpTimeSecond = 120
 var SyncMapBackUpPath = "./syncmapbackup-" // カレントディレクトリにバックアップを作成。パーミッションに注意。
 var InitMarkPath = "./init-"               // 初期化データ
@@ -43,13 +43,13 @@ func GetCurrentServerAddress() string {
 }
 
 func MyServerIsOnMasterServerIP() bool {
-	return strings.Compare(GetCurrentServerAddress(), RedisHostPrivateIPAddress) == 0
+	return strings.Compare(GetCurrentServerAddress(), HostPrivateIPAddress) == 0
 }
 func GetMasterServerAddress() string {
 	if MyServerIsOnMasterServerIP() {
 		return "127.0.0.1"
 	} else {
-		return RedisHostPrivateIPAddress
+		return HostPrivateIPAddress
 	}
 }
 

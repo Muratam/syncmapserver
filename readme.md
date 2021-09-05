@@ -63,7 +63,7 @@ var idToUserServer *syncmapserver.SyncMapServerConn
 func main(){
   // ここで指定した Private IP を持つSyncMapserverがMasterとして、他はSlaveとして起動。
   // 指定しない場合は localhost で起動する
-  syncmapserver.RedisHostPrivateIPAddress = "192.168.2.1"
+  syncmapserver.HostPrivateIPAddress = "192.168.2.1"
   smIdToUser := syncmapserver.NewSyncMapServerConnByPort(8885)
   u := User{}
   smIdToUser.Set("hoge", u) // シリアライズは中で勝手にやってくれる

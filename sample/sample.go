@@ -25,7 +25,7 @@ func assert(cond bool) {
 func main() {
 	// ここで指定した Private IP を持つSyncMapserverがMasterとして、他はSlaveとして起動。
 	// 指定しない場合は localhost で起動する
-	// syncmapserver.RedisHostPrivateIPAddress = "192.168.2.1"
+	// syncmapserver.HostPrivateIPAddress = "192.168.2.1"
 	smIdToUser := syncmapserver.NewSyncMapServerConnByPort(8885)
 	u := User{123, "name", "aaa", 444, time.Now().Truncate(time.Second)}
 	smIdToUser.Set("hoge", u) // シリアライズは中で勝手にやってくれる
