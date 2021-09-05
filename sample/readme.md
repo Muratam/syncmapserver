@@ -1,5 +1,7 @@
 # 動作サンプル
 
+`cd sample; go mod init main; go get -u github.com/Muratam/syncmapserver@v1.1.0`
+
 ## 通常サンプル
 
 `go run sample.go`
