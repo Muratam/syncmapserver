@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 )
 
@@ -30,6 +31,11 @@ func readCheck() {
 	fmt.Println("OK: Example::", u1)
 }
 func main() {
-	// backup()
+	for _, v := range os.Args {
+		if v == "store" {
+			backup()
+			break
+		}
+	}
 	readCheck()
 }

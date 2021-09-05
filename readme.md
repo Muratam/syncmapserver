@@ -52,10 +52,7 @@ Redisでは ZADD などが使えるため、単純なKey-Value 機能以外な�
 
 # 使用例
 
-- ISUCONでの使用サンプル：https://github.com/Muratam/isucon9q/blob/master/postapi.go 。
-  特定のキーのみのロック(+1人目のトランザクションが成功したら終了) は postBuy()。
-  要求があってから初めて接続を開始するので複数台でも起動順序は問われない。
-
+[サンプルはこちら](https://github.com/Muratam/syncmapserver/tree/master/sample)
 
 - User Struct をGet/Setする例
 
@@ -148,6 +145,12 @@ func main(){
 }
 
 ```
+
+
+- ISUCONでの使用サンプル：https://github.com/Muratam/isucon9q/blob/master/postapi.go 。
+  特定のキーのみのロック(+1人目のトランザクションが成功したら終了) は postBuy()。
+  要求があってから初めて接続を開始するので複数台でも起動順序は問われない。
+
 
 # ベンチマークとパフォーマンス
 

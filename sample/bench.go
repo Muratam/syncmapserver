@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/Muratam/syncmapserver"
 	"log"
 	"math/rand"
 	"net/http"
@@ -124,8 +125,8 @@ func smrTest() { // 実際の環境に沿ったテスト(1.5倍ほど速いは�
 	}()
 	func() {
 		smMaster.FlushAll()
-		smSlave2 := NewSyncMapServerConn("127.0.0.1:8080", false)
-		sms := []*SyncMapServerConn{smMaster, smSlave, smSlave2}
+		smSlave2 := syncmapserver.NewSyncMapServerConn("127.0.0.1:8080", false)
+		sms := []*syncmapserver.SyncMapServerConn{smMaster, smSlave, smSlave2}
 		wg := sync.WaitGroup{}
 		start := time.Now()
 		for i := 0; i < maxConn; i++ {
@@ -151,7 +152,7 @@ func smrTest() { // 実際の環境に沿ったテスト(1.5倍ほど速いは�
 
 /////////////////////////////////////////////
 
-func TestGetSetInt(conn KeyValueStoreConn) {
+func TestGetSetInt(conn syncmapserver.KeyValueStoreConn) {
 	// int を Get して Set するだけの 一番基本的なやつ
 	n := random()
 	x := 0
@@ -166,7 +167,7 @@ func TestGetSetInt(conn KeyValueStoreConn) {
 	ok := conn.Get("nop", &x)
 	assert(!ok)
 }
-func TestGetSetUser(conn KeyValueStoreConn) {
+func TestGetSetUser(conn syncmapserver.KeyValueStoreConn) {
 	// userデータ を Get して Set するだけ
 	// Pointer 型 は渡せないことに注意。struct in struct は多分大丈夫。
 	u := randUser()
@@ -177,7 +178,7 @@ func TestGetSetUser(conn KeyValueStoreConn) {
 	ok := conn.Get("nop", &u)
 	assert(!ok)
 }
-func TestIncrBy(conn KeyValueStoreConn) {
+func TestIncrBy(conn syncmapserver.KeyValueStoreConn) {
 	n := random()
 	x := 0
 	conn.Set("x", n)
@@ -191,7 +192,7 @@ func TestIncrBy(conn KeyValueStoreConn) {
 	assert(added1 == added2)
 	assert(added1 == pre+add)
 }
-func TestKeyCount(conn KeyValueStoreConn) {
+func TestKeyCount(conn syncmapserver.KeyValueStoreConn) {
 	conn.FlushAll()
 	assert(conn.DBSize() == 0)
 	key1 := "key1"
@@ -217,7 +218,7 @@ func TestKeyCount(conn KeyValueStoreConn) {
 	assert(conn.DBSize() == 2)
 	assert(len(conn.AllKeys()) == 2)
 }
-func TestMGetMSetString(conn KeyValueStoreConn) {
+func TestMGetMSetString(conn syncmapserver.KeyValueStoreConn) {
 	var keys []string
 	localMap := map[string]interface{}{}
 	for i := 0; i < 1000; i++ {
@@ -243,7 +244,7 @@ func TestMGetMSetString(conn KeyValueStoreConn) {
 		assert(ok)
 	}
 }
-func TestMGetMSetUser(conn KeyValueStoreConn) {
+func TestMGetMSetUser(conn syncmapserver.KeyValueStoreConn) {
 	var keys []string
 	localMap := map[string]interface{}{}
 	for i := 0; i < 1000; i++ {
@@ -263,7 +264,7 @@ func TestMGetMSetUser(conn KeyValueStoreConn) {
 		assert(proValue == preValue)
 	}
 }
-func TestMGetMSetInt(conn KeyValueStoreConn) {
+func TestMGetMSetInt(conn syncmapserver.KeyValueStoreConn) {
 	var keys []string
 	localMap := map[string]interface{}{}
 	for i := 0; i < 1000; i++ {
@@ -287,7 +288,7 @@ func TestMGetMSetInt(conn KeyValueStoreConn) {
 		assert(proValue == preValue)
 	}
 }
-func TestLRangeInt(conn KeyValueStoreConn) {
+func TestLRangeInt(conn syncmapserver.KeyValueStoreConn) {
 	conn.FlushAll()
 	key := "a"
 	n := 10
@@ -325,7 +326,7 @@ func TestLRangeInt(conn KeyValueStoreConn) {
 	}
 	assert(conn.LLen(key) == 0)
 }
-func BenchListUser(conn KeyValueStoreConn) {
+func BenchListUser(conn syncmapserver.KeyValueStoreConn) {
 	conn.FlushAll()
 	n := 10000
 	assert(n%2 == 0)
@@ -351,12 +352,12 @@ func BenchListUser(conn KeyValueStoreConn) {
 	assert(n == conn.LLen(key))
 }
 
-func TestParallelTransactionIncr(conn KeyValueStoreConn) {
+func TestParallelTransactionIncr(conn syncmapserver.KeyValueStoreConn) {
 	conn.Set("a", 0)
 	ExecuteImpl(2500, true, 250, func(i int) {
 		// Redisは楽観ロックなので成功するまでやる
 		// SyncMapServerはロックを取るので成功する
-		for !conn.Transaction("a", func(tx KeyValueStoreConn) {
+		for !conn.Transaction("a", func(tx syncmapserver.KeyValueStoreConn) {
 			x := 0
 			tx.Get("a", &x)
 			tx.Set("a", x+10)
@@ -365,11 +366,11 @@ func TestParallelTransactionIncr(conn KeyValueStoreConn) {
 	})
 	assert(conn.IncrBy("a", 0) == 25000)
 }
-func TestParallelList(conn KeyValueStoreConn) {
+func TestParallelList(conn syncmapserver.KeyValueStoreConn) {
 	// Redisは楽観ロックなので成功するまでやる
 	// SyncMapServerはロックを取るので成功する
 	ExecuteImpl(2500, true, 250, func(i int) {
-		for !conn.Transaction("a", func(tx KeyValueStoreConn) { tx.IncrBy("a", 1) }) {
+		for !conn.Transaction("a", func(tx syncmapserver.KeyValueStoreConn) { tx.IncrBy("a", 1) }) {
 		}
 	})
 	assert(conn.IncrBy("a", 0) == 2500)
@@ -380,7 +381,7 @@ func TestParallelList(conn KeyValueStoreConn) {
 	assert(conn.IncrBy("a", 0) == 2500)
 	conn.FlushAll()
 	ExecuteImpl(2500, true, 250, func(i int) {
-		for !conn.Transaction("a", func(tx KeyValueStoreConn) {
+		for !conn.Transaction("a", func(tx syncmapserver.KeyValueStoreConn) {
 			l := tx.LLen("a")
 			tx.RPush("a", 1)
 			if l > 0 {
@@ -392,7 +393,7 @@ func TestParallelList(conn KeyValueStoreConn) {
 	assert(conn.LLen("a") == 1)
 }
 
-func BenchMGetMSetUser4000(conn KeyValueStoreConn) {
+func BenchMGetMSetUser4000(conn syncmapserver.KeyValueStoreConn) {
 	conn.MSet(localUserMap4000)
 	mgetResult := conn.MGet(keys4000)
 	for key, preValue := range localUserMap4000 {
@@ -401,7 +402,7 @@ func BenchMGetMSetUser4000(conn KeyValueStoreConn) {
 		assert(proValue.ID == preValue.(User).ID)
 	}
 }
-func BenchMGetMSetStr4000(conn KeyValueStoreConn) {
+func BenchMGetMSetStr4000(conn syncmapserver.KeyValueStoreConn) {
 	localMap := map[string]interface{}{}
 	for i := 0; i < 4000; i++ {
 		key := keys4000[i]
@@ -415,7 +416,7 @@ func BenchMGetMSetStr4000(conn KeyValueStoreConn) {
 		assert(proValue[0] == preValue.(string)[0])
 	}
 }
-func BenchGetSetUser(conn KeyValueStoreConn) {
+func BenchGetSetUser(conn syncmapserver.KeyValueStoreConn) {
 	k := keys4000[0]
 	u := localUserMap4000[keys4000[0]].(User)
 	conn.Set(k, u)
@@ -423,14 +424,14 @@ func BenchGetSetUser(conn KeyValueStoreConn) {
 	conn.Get(k, &u2)
 	assert(u.ID == u2.ID)
 }
-func BenchParallelIncryBy(conn KeyValueStoreConn) {
+func BenchParallelIncryBy(conn syncmapserver.KeyValueStoreConn) {
 	conn.Set("a", 0)
 	Execute(10000, true, func(i int) {
 		conn.IncrBy("a", i)
 	})
 	fmt.Println(conn.IncrBy("a", 0) == 49995000)
 }
-func BenchParallelUserGetSetPopular(conn KeyValueStoreConn) {
+func BenchParallelUserGetSetPopular(conn syncmapserver.KeyValueStoreConn) {
 	// 特定のキーにのみアクセス過多
 	localMap := map[string]interface{}{}
 	for i := 0; i < 400; i++ {
@@ -440,7 +441,7 @@ func BenchParallelUserGetSetPopular(conn KeyValueStoreConn) {
 	conn.MSet(localMap)
 	ExecuteImpl(8000, true, 1000, func(i int) {
 		key := keys4000[i%4000]
-		for !conn.Transaction(key, func(tx KeyValueStoreConn) {
+		for !conn.Transaction(key, func(tx syncmapserver.KeyValueStoreConn) {
 			proValue := User{}
 			tx.Get(key, &proValue)
 			preValue := localUserMap4000[key]
@@ -449,7 +450,7 @@ func BenchParallelUserGetSetPopular(conn KeyValueStoreConn) {
 		}
 	})
 }
-func BenchParallelUserGetSet(conn KeyValueStoreConn) {
+func BenchParallelUserGetSet(conn syncmapserver.KeyValueStoreConn) {
 	Execute(10000, true, func(i int) {
 		key := keys4000[i%4000]
 		preValue := localUserMap4000[key]
