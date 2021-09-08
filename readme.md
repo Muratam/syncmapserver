@@ -15,7 +15,6 @@
 
 # 扱える命令
 ```go
-// Normal Command
 Get(key string, value interface{}) bool // ptr (キーが無ければ false)
 Set(key string, value interface{})
 MGet(keys []string) MGetResult     // 改めて Get するときに ptr . N+1対策
@@ -26,10 +25,11 @@ IncrBy(key string, value int) int
 DBSize() int       // means key count
 AllKeys() []string // get all keys
 FlushAll()
-// Transaction (キーをロックしているのでこの中の tx を使って値を読み書きしてね)
+// Transaction (悲観ロック。ここの tx を使って操作)
 Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool)
 TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool)
-IsLocked(key string) // Redisには存在しないがSyncMapServerには(悲観ロックなので)存在する
+// Additional Commands
+IsLocked(key string)  // 悲観ロックなので可能
 Insert(value interface{}) // str(DBSize()+1)のキーに(そのキーをロックして)挿入
 Initialize() // ISUCONで初期化の負荷を軽減するために使う
 ```
