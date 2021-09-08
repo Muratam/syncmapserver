@@ -29,26 +29,12 @@ FlushAll()
 // Transaction (キーをロックしているのでこの中の tx を使って値を読み書きしてね)
 Transaction(key string, f func(tx KeyValueStoreConn)) (isok bool)
 TransactionWithKeys(keys []string, f func(tx KeyValueStoreConn)) (isok bool)
-// List 関連 (こういうのはRedisの高機能のデータ構造のほうが使いそう)
-RPush(key string, values ...interface{}) int // Push後の最後の要素の index を返す
-LLen(key string) int
-LIndex(key string, index int, value interface{}) bool // ptr (キーが無ければ false)
-LPop(key string, value interface{}) bool              // ptr (キーが無ければ false)
-RPop(key string, value interface{}) bool              // ptr (キーが無ければ false)
-LSet(key string, index int, value interface{})
-LRange(key string, startIndex, stopIncludingIndex int) LRangeResult // ptr (0,-1 で全て取得可能) (負数の場合はPythonと同じような処理(stopIncludingIndexがPythonより1多い)) [a,b,c][0:-1] はPythonでは最後を含まないがこちらは含む
-// ISUCONで初期化の負荷を軽減するために使う
-Initialize()
-```
-
-以下はSyncMapServerのみ
-
-```go
 IsLocked(key string) // Redisには存在しないがSyncMapServerには(悲観ロックなので)存在する
 Insert(value interface{}) // str(DBSize()+1)のキーに(そのキーをロックして)挿入
+Initialize() // ISUCONで初期化の負荷を軽減するために使う
 ```
 
-Redisでは ZADD などが使えるため、単純なKey-Value 機能以外ならRedisを推奨
+Redisでは LIST や ZADD などが使えるため、単純なKey-Value 機能以外ならRedisを推奨
 
 # 使用例
 
@@ -126,26 +112,6 @@ func main(){
   assert(conn.IncrBy("a", 0) == 25000)
 }
 ```
-
-- 互換性を持ったままRedisにする例
-```go
-// 0番DBの指定したIPのところのRedisにつなぐ
-var idToUserServer *syncmapserver.RedisWrapper
-
-func main(){
-  idToUserServer = NewRedisWrapper("127.0.0.1", 0)
-  // あとは SyncMapServer のものと全く同じコードでよい。(楽観ロックが異なるTransaction以外は)
-  u := randUser()
-  idToUserServer.Set("hoge", u)
-  var u2 User
-  idToUserServer.Get("hoge", &u2)
-  assert(u == u2)
-  ok := conn.Get("piyo", &u)
-  assert(!ok)
-}
-
-```
-
 
 - ISUCONでの使用サンプル：https://github.com/Muratam/isucon9q/blob/master/postapi.go 。
   特定のキーのみのロック(+1人目のトランザクションが成功したら終了) は postBuy()。
